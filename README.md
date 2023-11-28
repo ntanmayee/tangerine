@@ -1,3 +1,6 @@
-![tangerine logo](assets/logo.png "Title")
+<p align="center">
+    <img src="assets/logo.png" alt="tangerine logo">
+</p>
+-----------------------
 
-# tangerine: TF Accessibility Network Gene Expression and Regulation
+**Tangerine** (Transcription Factor Accessibility Network and Gene Expression Regulation) is a tool to quantify the effect of transcription factor binding on gene regulation.
