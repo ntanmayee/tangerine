@@ -1,11 +1,12 @@
 from gimmemotifs.scanner import Scanner
-from gimmemotifs.fasta import Fasta
 from gimmemotifs.motif import default_motifs
 import scanpy as sc
-from .utils import peak2fasta, scan_dna_for_motifs
+from utils import peak2fasta, scan_dna_for_motifs
 import pandas as pd
 from sklearn.linear_model import Ridge
+from sklearn.model_selection import train_test_split
 import networkx as nx
+from biothings_client import get_client
 
 class ScannerMotifs(object):
     def __init__(self, genome='mm10', n_cpus=1, fpr=0.02, scan_width=5000) -> None:
@@ -30,8 +31,8 @@ class ScannerMotifs(object):
         all_tfs = list(set(all_tfs))
         return all_tfs
 
-    def scan_motifs_single(self, chr_name, start):
-        peakstr = f'{chr_name}:{start - self.scan_widthh}-{start}'
+    def scan_motifs_single(self, chr_name, start, strand):
+        peakstr = f'{chr_name}_{start - (self.scan_width * strand)}_{start}'
         target_sequences = peak2fasta(peak_ids=[peakstr], ref_genome='mm10')
         scanned_df = scan_dna_for_motifs(scanner_object=self.scanner_object, motifs_object=self.motifs, 
                                       sequence_object=target_sequences, divide=100000)
@@ -58,8 +59,8 @@ class ScannerMotifs(object):
         tf_list = list(set(tf_list))
         return tf_list
     
-    def run_single_scan(self, chr_name, start, score=None, include_indirect=False):
-        scanned_df = self.scan_motifs_single(chr_name, start)
+    def run_single_scan(self, chr_name, start, strand, score=None, include_indirect=False):
+        scanned_df = self.scan_motifs_single(chr_name, start, strand)
         tf_list = self.get_filtered_tfs(scanned_df, score, include_indirect)
         return tf_list
 
@@ -74,6 +75,15 @@ class Network(object):
         
         self.preprocess_adata()
         self.scanner = ScannerMotifs()
+
+    def __str__(self) -> str:
+        print_str = f'''Tangerine Network object with timepoints {str(self.timepoints)}
+\n{str(self.adata)}
+'''
+        return print_str
+    
+    def __repr__(self) -> str:
+        return self.__str__()
 
     def preprocess_adata(self):
         if self.path_to_adata.endswith('.h5ad'):
@@ -114,10 +124,10 @@ class Network(object):
         filtered_tfs = list(set(filtered_tfs))
         return filtered_tfs
 
-    def run_single_gene(self, gene_name, chr_name, start, score=None, include_indirect=False, dropout_threshold=50):
+    def run_single_gene(self, gene_name, chr_name, start, strand, score=None, include_indirect=False, dropout_threshold=50):
         assert chr_name not in self.scanner.all_tfs, 'Target gene cannot be a transcription factor'
 
-        tf_list = self.scanner.run_single_scan(chr_name, start, score, include_indirect)
+        tf_list = self.scanner.run_single_scan(chr_name, start, strand, score, include_indirect)
         tf_list = self.filter_selected_tfs(tf_list, dropout_threshold)
 
         correlation_df = pd.DataFrame(index=tf_list)    
@@ -131,9 +141,13 @@ class Network(object):
             correlation_df[time] = data_df.corr(method='spearman')[gene_name]
 
             # compute coefficients
+            X_train, X_test, y_train, y_test = train_test_split(data_df[tf_list], data_df[gene_name], test_size=100, random_state=29)
+
             model = Ridge()
-            model.fit(data_df[tf_list], data_df[gene_name])
+            model.fit(X_train, y_train)
             coefficients_df[time] = list(model.coef_)
+
+            print(f'Model score ({time}) = {model.score(X_test, y_test)}')
 
         # update networkx object with correlation and coefficients
         for time in self.timepoints:
@@ -142,3 +156,19 @@ class Network(object):
                 network.add_edge(tf, gene_name, correlation=correlation_df.loc[tf][time], coefficient=coefficients_df.loc[tf][time])
 
         return correlation_df, coefficients_df
+
+    def run_all_genes(self, dropout_threshold=50):
+        filtered_genes = list(self.adata.var[self.adata.var['pct_dropout_by_counts'] < dropout_threshold].index)
+        filtered_genes = list(filter(lambda x: x not in self.scanner.all_tfs, filtered_genes))
+        print(f'Total genes selected: {len(filtered_genes)}')
+
+        mg = get_client('gene')
+        result_df = mg.querymany(filtered_genes, scopes=['symbol'], fields=['genomic_pos.chr', 'genomic_pos.start', 'genomic_pos.strand'], as_dataframe=True)
+
+        def run_gene_pandas(row):
+            start = int(float(row['genomic_pos.start']))
+            strand = int(row['genomic_pos.strand'])
+            return self.run_single_gene(row.index, f'chr{row["genomic_pos.chr"]}', start, strand)
+        
+        result_df.apply(run_gene_pandas, axis=1)
+        

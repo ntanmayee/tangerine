@@ -1,3 +1,5 @@
 .ipynb_checkpoints/
-assets/.ipynb_checkpoints
-ipynb/
+assets/.ipynb_checkpoints/
+tangerine/.ipynb_checkpoints/
+tangerine/__pycache__/
+tangerine/testing.ipynb

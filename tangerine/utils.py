@@ -147,7 +147,7 @@ def decompose_chrstr(peak_str):
     return chr_, start, end
 
 
-def peak2fasta(peak_ids, ref_genome, genomes_dir):
+def peak2fasta(peak_ids, ref_genome):
 
     '''
     Convert peak_id into fasta object.
@@ -164,7 +164,7 @@ def peak2fasta(peak_ids, ref_genome, genomes_dir):
         gimmemotifs fasta object: DNA sequence in fasta format
 
     '''
-    genome_data = Genome(ref_genome, genomes_dir=genomes_dir)
+    genome_data = Genome(ref_genome)
 
     def peak2seq(peak_id):
         chromosome_name, start, end = decompose_chrstr(peak_id)
