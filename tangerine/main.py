@@ -1,6 +1,8 @@
-import argparse
+from find_motifs import Network
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-i', "--input_adata", required=True, description="Path to single cell data")
-    parser.add_argument('-o', '--output_dir', required=True, description="Path to output directory")
+    path_to_adata = '../../sc/ipynb/new_data_mar23/write/adata_network_inference.h5ad'
+    timepoints = ['0h', '6h', '18h', '54h']
+
+    network = Network(path_to_adata, timepoints)
+    network.run_all_genes('arid1a_networks')

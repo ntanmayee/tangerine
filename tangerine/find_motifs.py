@@ -7,6 +7,8 @@ from sklearn.linear_model import Ridge
 from sklearn.model_selection import train_test_split
 import networkx as nx
 from biothings_client import get_client
+from os.path import join
+
 
 class ScannerMotifs(object):
     def __init__(self, genome='mm10', n_cpus=1, fpr=0.02, scan_width=5000) -> None:
@@ -125,10 +127,14 @@ class Network(object):
         return filtered_tfs
 
     def run_single_gene(self, gene_name, chr_name, start, strand, score=None, include_indirect=False, dropout_threshold=50):
+        assert gene_name in self.adata.var.index, f'Gene {gene_name} not found in self.adata'
         assert chr_name not in self.scanner.all_tfs, 'Target gene cannot be a transcription factor'
 
         tf_list = self.scanner.run_single_scan(chr_name, start, strand, score, include_indirect)
         tf_list = self.filter_selected_tfs(tf_list, dropout_threshold)
+
+        if len(tf_list) < 1:
+            return None, None
 
         correlation_df = pd.DataFrame(index=tf_list)    
         coefficients_df = pd.DataFrame(index=tf_list)
@@ -145,30 +151,39 @@ class Network(object):
 
             model = Ridge()
             model.fit(X_train, y_train)
+            
             coefficients_df[time] = list(model.coef_)
+            model_score = model.score(X_test, y_test)
 
-            print(f'Model score ({time}) = {model.score(X_test, y_test)}')
-
-        # update networkx object with correlation and coefficients
-        for time in self.timepoints:
+            # update networkx object with correlation and coefficients
             network = self.networks[time]
             for tf in tf_list:
                 network.add_edge(tf, gene_name, correlation=correlation_df.loc[tf][time], coefficient=coefficients_df.loc[tf][time])
+        
+            # set model as node attribute
+            nx.set_node_attributes(network, {gene_name: {'score': model_score}})
 
         return correlation_df, coefficients_df
 
-    def run_all_genes(self, dropout_threshold=50):
+    def run_all_genes(self, save_path, dropout_threshold=50):
         filtered_genes = list(self.adata.var[self.adata.var['pct_dropout_by_counts'] < dropout_threshold].index)
         filtered_genes = list(filter(lambda x: x not in self.scanner.all_tfs, filtered_genes))
-        print(f'Total genes selected: {len(filtered_genes)}')
 
         mg = get_client('gene')
-        result_df = mg.querymany(filtered_genes, scopes=['symbol'], fields=['genomic_pos.chr', 'genomic_pos.start', 'genomic_pos.strand'], as_dataframe=True)
+        result_df = mg.querymany(filtered_genes, scopes=['symbol'], fields=['genomic_pos.chr', 'genomic_pos.start', 'genomic_pos.strand'], as_dataframe=True, species="mouse")
+        result_df.reset_index(inplace=True)
+        result_df.rename({'query':'symbol'}, axis=1, inplace=True)
+        result_df.dropna(subset=['genomic_pos.chr', 'genomic_pos.start', 'genomic_pos.strand'], inplace=True)
+        result_df.drop_duplicates(subset=['symbol'], inplace=True)
+
+        print(f'Total genes selected: {len(result_df)}')
 
         def run_gene_pandas(row):
             start = int(float(row['genomic_pos.start']))
             strand = int(row['genomic_pos.strand'])
-            return self.run_single_gene(row.index, f'chr{row["genomic_pos.chr"]}', start, strand)
+            return self.run_single_gene(row.symbol, f'chr{row["genomic_pos.chr"]}', start, strand)
         
         result_df.apply(run_gene_pandas, axis=1)
-        
+
+        for time in self.timepoints:
+            nx.write_gml(self.networks[time], join(save_path, f'network_{time}.gml.gz'))
