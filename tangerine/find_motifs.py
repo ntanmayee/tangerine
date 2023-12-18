@@ -8,6 +8,7 @@ from sklearn.model_selection import train_test_split
 import networkx as nx
 from biothings_client import get_client
 from os.path import join
+from pathlib import Path
 
 
 class ScannerMotifs(object):
@@ -185,5 +186,6 @@ class Network(object):
         
         result_df.apply(run_gene_pandas, axis=1)
 
+        Path(save_path).mkdir(parents=True, exist_ok=True)
         for time in self.timepoints:
             nx.write_gml(self.networks[time], join(save_path, f'network_{time}.gml.gz'))
