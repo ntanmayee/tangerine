@@ -3,3 +3,6 @@ assets/.ipynb_checkpoints/
 tangerine/.ipynb_checkpoints/
 tangerine/__pycache__/
 tangerine/testing.ipynb
+tangerine/*.ipynb
+tangerine/arid1a_networks/
+tangerine/qsub_outs/
