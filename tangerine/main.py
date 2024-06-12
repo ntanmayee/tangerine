@@ -5,4 +5,4 @@ if __name__ == "__main__":
     timepoints = ['0h', '6h', '18h', '54h']
 
     network = Network(path_to_adata, timepoints)
-    network.run_all_genes('arid1a_networks')
+    network.run_all_genes('arid1a_networks_lasso')

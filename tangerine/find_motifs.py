@@ -3,12 +3,13 @@ from gimmemotifs.motif import default_motifs
 import scanpy as sc
 from utils import peak2fasta, scan_dna_for_motifs
 import pandas as pd
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, Lasso
 from sklearn.model_selection import train_test_split
 import networkx as nx
 from biothings_client import get_client
 from os.path import join
 from pathlib import Path
+from scipy.stats import zscore
 
 
 class ScannerMotifs(object):
@@ -69,7 +70,7 @@ class ScannerMotifs(object):
 
 
 class Network(object):
-    def __init__(self, path_to_adata, timepoints, n_pcs=35, n_neighbors=100) -> None:
+    def __init__(self, path_to_adata, timepoints, n_pcs=35, n_neighbors=100, scan_width=10000) -> None:
         self.path_to_adata = path_to_adata
         self.n_pcs = n_pcs
         self.n_neighbors = n_neighbors
@@ -77,12 +78,10 @@ class Network(object):
         self.networks = {t:nx.DiGraph() for t in self.timepoints}
         
         self.preprocess_adata()
-        self.scanner = ScannerMotifs()
+        self.scanner = ScannerMotifs(scan_width=scan_width)
 
     def __str__(self) -> str:
-        print_str = f'''Tangerine Network object with timepoints {str(self.timepoints)}
-\n{str(self.adata)}
-'''
+        print_str = f'Tangerine Network object with timepoints {str(self.timepoints)}\n\n{str(self.adata)}'
         return print_str
     
     def __repr__(self) -> str:
@@ -150,7 +149,7 @@ class Network(object):
             # compute coefficients
             X_train, X_test, y_train, y_test = train_test_split(data_df[tf_list], data_df[gene_name], test_size=100, random_state=29)
 
-            model = Ridge()
+            model = Lasso(alpha=0.01)
             model.fit(X_train, y_train)
             
             coefficients_df[time] = list(model.coef_)
@@ -161,7 +160,7 @@ class Network(object):
             for tf in tf_list:
                 network.add_edge(tf, gene_name, correlation=correlation_df.loc[tf][time], coefficient=coefficients_df.loc[tf][time])
         
-            # set model as node attribute
+            # set model score as node attribute
             nx.set_node_attributes(network, {gene_name: {'score': model_score}})
 
         return correlation_df, coefficients_df

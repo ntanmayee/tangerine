@@ -6,3 +6,10 @@ tangerine/testing.ipynb
 tangerine/*.ipynb
 tangerine/arid1a_networks/
 tangerine/qsub_outs/
+tangerine/arid1a_networks_z/
+tangerine/arid1a_networks_lasso/
+tangerine/tf_networks/
+tangerine/tf_networks_dot/
+umap_results/
+tangerine/*.csv
+tangerine/tf_subgraphs_dot/
