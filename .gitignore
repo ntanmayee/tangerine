@@ -14,3 +14,4 @@ umap_results/
 preprocess/*.csv
 preprocess/tf_subgraphs_dot/
 preprocess/assets/.ipynb_checkpoints/
+preprocess/smartseq_networks/

@@ -189,7 +189,7 @@ class Network(object):
         for time in self.timepoints:
             nx.write_gml(self.networks[time], join(save_path, f'network_{time}.gml.gz'))
 
-    def run_tf_correlation(self, save_path, dropout_threshold=50):
+    def run_tf_correlation(self, save_path, dropout_threshold=50, resolution=1, edge_threshold=0.1, seed=42):
         def filter_selected_tfs(tf_list, dropout_threshold=50):
             filtered_tfs = []
 
@@ -214,9 +214,26 @@ class Network(object):
         # compute correlation
         corr_dfs = {}
         for time in self.timepoints:
-            data_df = sc.get.obs_df(adata, tf_list + ['time'], use_raw=False)
+            data_df = sc.get.obs_df(adata, filt_tfs + ['time'], use_raw=False)
             data_df = data_df[data_df.time == time].drop('time', axis=1)
             corr_dfs[time] = data_df.corr('spearman')
 
             # write to file
             corr_dfs[time].to_csv(join(save_path, f'tf_tf_{time}.csv'))
+
+        # cluster 
+        # first create graph from TF correlation matrix
+        all_graphs = {}
+        for time in self.timepoints:
+            adj_mat = (1 - np.eye(len(filt_tfs))) * (np.abs(corr_dfs[time]) > edge_threshold) * (corr_dfs[time] * 10)**3
+            all_graphs[time] = nx.from_pandas_adjacency(adj_mat, create_using=nx.Graph())
+        
+        cluster_df = pd.DataFrame(index=tf_list, columns=timepoints)
+        for time in timepoints:
+            clusters = nx.community.louvain_communities(all_graphs[time], seed=seed, resolution=resolution)
+            for i, clus in enumerate(clusters):
+                for gene in clus:
+                    cluster_df.loc[gene, time] = f'{time}-{i+1}'
+        
+        # write to file
+        cluster_df.to_csv(join(save_path, 'louvain_tf.csv'))
