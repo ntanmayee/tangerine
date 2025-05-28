@@ -19,3 +19,4 @@ visualise/__pycache__/
 .DS_Store
 radial_plot.ipynb
 visualise/test_app.py
+preprocess/smartseq_networks/
