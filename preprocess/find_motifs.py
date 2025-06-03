@@ -10,10 +10,14 @@ from biothings_client import get_client
 from os.path import join
 from pathlib import Path
 from scipy.stats import zscore
+import numpy as np
+from scipy.cluster.hierarchy import linkage, fcluster
 
 
 class ScannerMotifs(object):
-    def __init__(self, genome='mm10', n_cpus=1, fpr=0.02, scan_width=5000) -> None:
+    def __init__(self, genome, n_cpus=1, fpr=0.02, scan_width=5000) -> None:
+        self.genome = genome
+
         self.scanner_object = Scanner(ncpus=n_cpus)
         self.motifs = default_motifs()
 
@@ -37,7 +41,7 @@ class ScannerMotifs(object):
 
     def scan_motifs_single(self, chr_name, start, strand):
         peakstr = f'{chr_name}_{start - (self.scan_width * strand)}_{start}'
-        target_sequences = peak2fasta(peak_ids=[peakstr], ref_genome='mm10')
+        target_sequences = peak2fasta(peak_ids=[peakstr], ref_genome=self.genome)
         scanned_df = scan_dna_for_motifs(scanner_object=self.scanner_object, motifs_object=self.motifs, 
                                       sequence_object=target_sequences, divide=100000)
         
@@ -70,7 +74,7 @@ class ScannerMotifs(object):
 
 
 class Network(object):
-    def __init__(self, path_to_adata, timepoints, n_pcs=35, n_neighbors=100, scan_width=10000) -> None:
+    def __init__(self, path_to_adata, timepoints, genome, n_pcs=35, n_neighbors=100, scan_width=10000) -> None:
         self.path_to_adata = path_to_adata
         self.n_pcs = n_pcs
         self.n_neighbors = n_neighbors
@@ -78,7 +82,12 @@ class Network(object):
         self.networks = {t:nx.DiGraph() for t in self.timepoints}
         
         self.preprocess_adata()
-        self.scanner = ScannerMotifs(scan_width=scan_width)
+        self.scanner = ScannerMotifs(self.genome, scan_width=scan_width)
+
+        if genome in ['mm10', 'hg19']:
+            self.genome = genome
+        else:
+            raise NotImplementedError('Unsupported organism. Please raise an issue if you think this is a mistake.')
 
     def __str__(self) -> str:
         print_str = f'Tangerine Network object with timepoints {str(self.timepoints)}\n\n{str(self.adata)}'
@@ -147,7 +156,7 @@ class Network(object):
             correlation_df[time] = data_df.corr(method='spearman')[gene_name]
 
             # compute coefficients
-            X_train, X_test, y_train, y_test = train_test_split(data_df[tf_list], data_df[gene_name], test_size=100, random_state=29)
+            X_train, X_test, y_train, y_test = train_test_split(data_df[tf_list], data_df[gene_name], test_size=0.1, random_state=29)
 
             model = Ridge()
             model.fit(X_train, y_train)
@@ -211,29 +220,37 @@ class Network(object):
             return filtered_tfs
 
         filt_tfs = filter_selected_tfs(self.scanner.all_tfs, dropout_threshold)
+        
         # compute correlation
         corr_dfs = {}
         for time in self.timepoints:
-            data_df = sc.get.obs_df(adata, filt_tfs + ['time'], use_raw=False)
+            data_df = sc.get.obs_df(self.adata, filt_tfs + ['time'], use_raw=False)
             data_df = data_df[data_df.time == time].drop('time', axis=1)
             corr_dfs[time] = data_df.corr('spearman')
 
             # write to file
             corr_dfs[time].to_csv(join(save_path, f'tf_tf_{time}.csv'))
 
-        # cluster 
-        # first create graph from TF correlation matrix
-        all_graphs = {}
+        # cluster using heirarchical clustering
+        cluster_df = pd.DataFrame(index=corr_dfs[self.timepoints[0]].index, columns=self.timepoints)
+
         for time in self.timepoints:
-            adj_mat = (1 - np.eye(len(filt_tfs))) * (np.abs(corr_dfs[time]) > edge_threshold) * (corr_dfs[time] * 10)**3
-            all_graphs[time] = nx.from_pandas_adjacency(adj_mat, create_using=nx.Graph())
-        
-        cluster_df = pd.DataFrame(index=tf_list, columns=timepoints)
-        for time in timepoints:
-            clusters = nx.community.louvain_communities(all_graphs[time], seed=seed, resolution=resolution)
-            for i, clus in enumerate(clusters):
-                for gene in clus:
-                    cluster_df.loc[gene, time] = f'{time}-{i+1}'
-        
+            X = corr_dfs[time].values
+            Z = linkage(X, method='ward')
+
+            # optimise using elbow-like metric for distances
+            distances = Z[:, 2]
+            diffs = np.diff(distances)
+
+            max_gap_idx = np.argmax(diffs)
+            num_clusters = len(distances) - max_gap_idx
+            
+            cluster_labels = fcluster(Z, t=num_clusters, criterion='maxclust')
+            cluster_df.loc[corr_dfs[time].index, time] = cluster_labels
+
+        for time in self.timepoints:
+            cluster_df[time] = cluster_df[time].apply(lambda x: f'{time}-{x}')
+            print(cluster_df[time].value_counts())
+
         # write to file
         cluster_df.to_csv(join(save_path, 'louvain_tf.csv'))

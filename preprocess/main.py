@@ -14,6 +14,6 @@ if __name__ == "__main__":
     # path_to_adata = '/cluster/gs_lab/tnarendra001/sc/ipynb/smart_seq/smart_seq_norm.h5ad'
     # timepoints = ['0h', '2h', '6h', '54h']
 
-    network = Network(args.adata_path, args.timepoints)
+    network = Network(args.adata_path, args.timepoints, args.genome, scan_width=args.scan_width)
     network.run_tf_correlation(args.save_name)
     network.run_all_genes(args.save_name)
