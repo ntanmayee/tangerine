@@ -46,6 +46,7 @@ def make_app_layout(app, tf_list_picker, gene_list, timepoints):
                 ]),
                 dbc.Row([
                     html.H5('Alluvial plot'),
+                    html.P('Select a region from the heatmap to check how cluster membership changes over time.'),
                     dcc.Graph(figure={}, id='parcat'),
                     dbc.Table(id='output')
 
@@ -53,24 +54,21 @@ def make_app_layout(app, tf_list_picker, gene_list, timepoints):
             ]),
             dcc.Tab(label='TF-Gene', children=[
                 dbc.Row([
-                    dbc.Col([
-                        html.H5('TF view'),
-                        html.P('Select a TF from the dropdown menu.'),
-                        dcc.Dropdown(tf_list_picker, 'Pou5f1', id='tf-picker'),
-                        dcc.Graph(figure={}, id='tf-correlation'),
-                        html.Pre(id='selected-genes', style=styles['pre'])
-                    ]),
-                    dbc.Col([
-                        html.H5('Gene view'),
-                        html.P('Select a gene from the dropdown menu.'),
-                        dcc.Dropdown(gene_list, 'L1td1', id='gene-picker'),
-                        dcc.Graph(figure={}, id='gene-correlation'),
-                        html.Pre(id='selected-tfs', style=styles['pre'])
-                    ])
+                    html.H5('TF view'),
+                    html.P('Select a TF from the dropdown menu.'),
+                    dcc.Dropdown(tf_list_picker, 'Pou5f1', id='tf-picker'),
+                    dcc.Graph(figure={}, id='tf-correlation'),
+                    html.Pre(id='selected-genes', style=styles['pre'])
                 ]),
-            ]),
-            
-            ]),
+                dbc.Row([
+                    html.H5('Gene view'),
+                    html.P('Select a gene from the dropdown menu.'),
+                    dcc.Dropdown(gene_list, 'L1td1', id='gene-picker'),
+                    dcc.Graph(figure={}, id='gene-correlation'),
+                    html.Pre(id='selected-tfs', style=styles['pre'])
+                ]),
+            ]),     
+        ]),
     ])
 
 def run_app(timepoints, base_path):

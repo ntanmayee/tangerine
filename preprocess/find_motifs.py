@@ -1,5 +1,7 @@
 from gimmemotifs.scanner import Scanner
-from gimmemotifs.motif import default_motifs
+from gimmemotifs.motif import read_motifs
+from gimmemotifs.config import MotifConfig
+from gimmemotifs.utils import pfmfile_location
 import scanpy as sc
 from utils import peak2fasta, scan_dna_for_motifs
 import pandas as pd
@@ -12,6 +14,26 @@ from pathlib import Path
 from scipy.stats import zscore
 import numpy as np
 from scipy.cluster.hierarchy import linkage, fcluster
+import os
+
+
+# copied from previous version of gimme motifs repository
+# somehow this has been removed in the lastest update
+
+def default_motifs():
+    """Return list of Motif instances from default motif database."""
+    config = MotifConfig()
+    d = config.get_motif_dir()
+    m = config.get_default_params()["motif_db"]
+
+    if not d or not m:
+        raise ValueError("default motif database not configured")
+
+    fname = os.path.join(d, m)
+    with open(fname) as f:
+        motifs = read_motifs(f)
+
+    return motifs
 
 
 class ScannerMotifs(object):
@@ -75,6 +97,11 @@ class ScannerMotifs(object):
 
 class Network(object):
     def __init__(self, path_to_adata, timepoints, genome, n_pcs=35, n_neighbors=100, scan_width=10000) -> None:
+        if genome in ['mm10', 'hg19']:
+            self.genome = genome
+        else:
+            raise NotImplementedError('Unsupported organism. Please raise an issue if you think this is a mistake.')
+        
         self.path_to_adata = path_to_adata
         self.n_pcs = n_pcs
         self.n_neighbors = n_neighbors
@@ -83,11 +110,6 @@ class Network(object):
         
         self.preprocess_adata()
         self.scanner = ScannerMotifs(self.genome, scan_width=scan_width)
-
-        if genome in ['mm10', 'hg19']:
-            self.genome = genome
-        else:
-            raise NotImplementedError('Unsupported organism. Please raise an issue if you think this is a mistake.')
 
     def __str__(self) -> str:
         print_str = f'Tangerine Network object with timepoints {str(self.timepoints)}\n\n{str(self.adata)}'
