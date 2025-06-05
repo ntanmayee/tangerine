@@ -15,6 +15,7 @@ from scipy.stats import zscore
 import numpy as np
 from scipy.cluster.hierarchy import linkage, fcluster
 import os
+import pathlib
 
 
 # copied from previous version of gimme motifs repository
@@ -196,8 +197,14 @@ class Network(object):
             nx.set_node_attributes(network, {gene_name: {'score': model_score}})
 
         return correlation_df, coefficients_df
+    
+    def check_path_exists(self, path_name):
+        path = pathlib.Path(path_name)
+        path.mkdir(parents=True, exist_ok=True)
 
     def run_all_genes(self, save_path, dropout_threshold=50):
+        self.check_path_exists(save_path)
+
         filtered_genes = list(self.adata.var[self.adata.var['pct_dropout_by_counts'] < dropout_threshold].index)
         filtered_genes = list(filter(lambda x: x not in self.scanner.all_tfs, filtered_genes))
 
@@ -221,7 +228,9 @@ class Network(object):
         for time in self.timepoints:
             nx.write_gml(self.networks[time], join(save_path, f'network_{time}.gml.gz'))
 
-    def run_tf_correlation(self, save_path, dropout_threshold=50, resolution=1, edge_threshold=0.1, seed=42):
+    def run_tf_correlation(self, save_path, dropout_threshold=50):
+        self.check_path_exists(save_path)
+
         def filter_selected_tfs(tf_list, dropout_threshold=50):
             filtered_tfs = []
 
