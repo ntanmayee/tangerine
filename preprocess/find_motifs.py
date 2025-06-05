@@ -248,7 +248,7 @@ class Network(object):
         corr_dfs = {}
         for time in self.timepoints:
             data_df = sc.get.obs_df(self.adata, filt_tfs + [self.time_var], use_raw=False)
-            data_df = data_df[data_df.time == time].drop(self.time_var, axis=1)
+            data_df = data_df[data_df[self.time_var] == time].drop(self.time_var, axis=1)
             corr_dfs[time] = data_df.corr('spearman')
 
             # write to file
