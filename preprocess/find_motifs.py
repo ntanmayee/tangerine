@@ -96,12 +96,13 @@ class ScannerMotifs(object):
 
 
 class Network(object):
-    def __init__(self, path_to_adata, timepoints, genome, n_pcs=35, n_neighbors=100, scan_width=10000) -> None:
+    def __init__(self, path_to_adata, timepoints, genome, time_var, n_pcs=35, n_neighbors=100, scan_width=10000) -> None:
         if genome in ['mm10', 'hg19']:
             self.genome = genome
         else:
             raise NotImplementedError('Unsupported organism. Please raise an issue if you think this is a mistake.')
         
+        self.time_var = time_var
         self.path_to_adata = path_to_adata
         self.n_pcs = n_pcs
         self.n_neighbors = n_neighbors
@@ -246,8 +247,8 @@ class Network(object):
         # compute correlation
         corr_dfs = {}
         for time in self.timepoints:
-            data_df = sc.get.obs_df(self.adata, filt_tfs + ['time'], use_raw=False)
-            data_df = data_df[data_df.time == time].drop('time', axis=1)
+            data_df = sc.get.obs_df(self.adata, filt_tfs + [self.time_var], use_raw=False)
+            data_df = data_df[data_df.time == time].drop(self.time_var, axis=1)
             corr_dfs[time] = data_df.corr('spearman')
 
             # write to file
