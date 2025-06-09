@@ -1,21 +1,20 @@
 from gimmemotifs.scanner import Scanner
 from gimmemotifs.motif import read_motifs
 from gimmemotifs.config import MotifConfig
-from gimmemotifs.utils import pfmfile_location
 import scanpy as sc
 from utils import peak2fasta, scan_dna_for_motifs
 import pandas as pd
-from sklearn.linear_model import Ridge, Lasso
+from sklearn.linear_model import Ridge
 from sklearn.model_selection import train_test_split
 import networkx as nx
 from biothings_client import get_client
 from os.path import join
 from pathlib import Path
-from scipy.stats import zscore
 import numpy as np
 from scipy.cluster.hierarchy import linkage, fcluster
 import os
 import pathlib
+from logger import logger
 
 
 # copied from previous version of gimme motifs repository
@@ -100,6 +99,7 @@ class Network(object):
     def __init__(self, path_to_adata, timepoints, genome, time_var, n_pcs=35, n_neighbors=100, scan_width=10000) -> None:
         if genome in ['mm10', 'hg19']:
             self.genome = genome
+            logger.info(f'{self.genome} selected')
         else:
             raise NotImplementedError('Unsupported organism. Please raise an issue if you think this is a mistake.')
         
@@ -123,7 +123,7 @@ class Network(object):
     def preprocess_adata(self):
         if self.path_to_adata.endswith('.h5ad'):
             self.adata = sc.read_h5ad(self.path_to_adata)
-
+            logger.info('Succesfully read in adata')
         else:
             raise NotImplementedError('Cannot read single cell data file.')
         
@@ -155,15 +155,20 @@ class Network(object):
                     filtered_tfs.append(tf)
             except KeyError:
                 pass
-            
+        
         filtered_tfs = list(set(filtered_tfs))
+        logger.info(f'Total number of TFs: {len(filtered_tfs)}')
         return filtered_tfs
 
     def run_single_gene(self, gene_name, chr_name, start, strand, score=None, include_indirect=False, dropout_threshold=50):
         assert gene_name in self.adata.var.index, f'Gene {gene_name} not found in self.adata'
         assert chr_name not in self.scanner.all_tfs, 'Target gene cannot be a transcription factor'
 
-        tf_list = self.scanner.run_single_scan(chr_name, start, strand, score, include_indirect)
+        try:
+            tf_list = self.scanner.run_single_scan(chr_name, start, strand, score, include_indirect)
+        except:
+            logger.info(f'Some error for gene {gene_name}, {chr_name}')
+            return pd.DataFrame(), pd.DataFrame()
         tf_list = self.filter_selected_tfs(tf_list, dropout_threshold)
 
         if len(tf_list) < 1:
@@ -203,6 +208,7 @@ class Network(object):
         path.mkdir(parents=True, exist_ok=True)
 
     def run_all_genes(self, save_path, dropout_threshold=50):
+        logger.info('Runing for all genes...')
         self.check_path_exists(save_path)
 
         filtered_genes = list(self.adata.var[self.adata.var['pct_dropout_by_counts'] < dropout_threshold].index)
@@ -223,10 +229,12 @@ class Network(object):
             return self.run_single_gene(row.symbol, f'chr{row["genomic_pos.chr"]}', start, strand)
         
         result_df.apply(run_gene_pandas, axis=1)
+        logger.info('Complete!')
 
         Path(save_path).mkdir(parents=True, exist_ok=True)
         for time in self.timepoints:
             nx.write_gml(self.networks[time], join(save_path, f'network_{time}.gml.gz'))
+        logger.info('Saved result graphs into file.')
 
     def run_tf_correlation(self, save_path, dropout_threshold=50):
         self.check_path_exists(save_path)
@@ -254,6 +262,7 @@ class Network(object):
         filt_tfs = filter_selected_tfs(self.scanner.all_tfs, dropout_threshold)
         
         # compute correlation
+        logger.info('Computing correlation among TFs...')
         corr_dfs = {}
         for time in self.timepoints:
             data_df = sc.get.obs_df(self.adata, filt_tfs + [self.time_var], use_raw=False)
@@ -263,6 +272,7 @@ class Network(object):
             # write to file
             corr_dfs[time].to_csv(join(save_path, f'tf_tf_{time}.csv'))
 
+        logger.info('Clustering TFs...')
         # cluster using heirarchical clustering
         cluster_df = pd.DataFrame(index=corr_dfs[self.timepoints[0]].index, columns=self.timepoints)
 
@@ -282,7 +292,8 @@ class Network(object):
 
         for time in self.timepoints:
             cluster_df[time] = cluster_df[time].apply(lambda x: f'{time}-{x}')
-            print(cluster_df[time].value_counts())
+            logger.debug(cluster_df[time].value_counts())
 
         # write to file
         cluster_df.to_csv(join(save_path, 'louvain_tf.csv'))
+        logger.info('Saved clustering results to file.')
