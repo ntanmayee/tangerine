@@ -25,3 +25,4 @@ visualise/test_app.py
 tangerine/preprocess/smartseq_networks/
 tangerine/preprocess/run.sh
 outs/
+tangerine/visualise/__pycache__/
