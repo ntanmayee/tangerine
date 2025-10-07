@@ -2,7 +2,7 @@ from gimmemotifs.scanner import Scanner
 from gimmemotifs.motif import read_motifs
 from gimmemotifs.config import MotifConfig
 import scanpy as sc
-from utils import peak2fasta, scan_dna_for_motifs
+from tangerine.preprocess.utils import peak2fasta, scan_dna_for_motifs
 import pandas as pd
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import train_test_split
@@ -14,7 +14,7 @@ import numpy as np
 from scipy.cluster.hierarchy import linkage, fcluster
 import os
 import pathlib
-from logger import logger
+from tangerine.preprocess.logger import logger
 
 
 # copied from previous version of gimme motifs repository
