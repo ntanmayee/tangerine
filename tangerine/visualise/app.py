@@ -3,7 +3,7 @@ import json
 from dash import Dash, html, dcc, callback, Output, Input, State, dash_table
 import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
-from data_loader import DataLoader
+from tangerine.visualise.data_loader import DataLoader
 from matplotlib import colors
 import matplotlib as mpl
 import itertools as it
