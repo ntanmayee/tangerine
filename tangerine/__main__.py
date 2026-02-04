@@ -29,6 +29,7 @@ def process(
     scan_width: int = typer.Option(10000, '--scan_width', '-sw', help='Length of window upstream of promoter to search for motifs'),
     save_name: Optional[Path] = typer.Option(None, '--save_path', '-sp', help='Path to save results')
 ):
+    print_message()
     timepoints = timepoints.split()
     _tangerine_pipeline(
         'process', 
@@ -45,6 +46,7 @@ def visualise(
     timepoints: str = typer.Option(None, '--timepoints', '-tp', help='List of timepoints separated by space'),
     save_name: Optional[Path] = typer.Option(None, '--save_path', '-sp', help='Path to save results')
 ):
+    print_message()
     timepoints = timepoints.split()
     _tangerine_pipeline(
         'visualise',

@@ -19,13 +19,16 @@ def _tangerine_pipeline(
     assert timepoints is not None, 'Timepoints must be specified'
     assert save_name is not None, 'Save path must be specified'
 
-    if "preprocess" == pipeline_step:
+    if "process" == pipeline_step:
         # assertion statements to check parameters
         assert adata_path is not None, 'Adata object required'
         assert genome is not None, 'Genome must be specified'
         assert time_var is not None, '`time_var` is required. Specify which column in adata.obs denotes time'
         assert scan_width is not None, 'Specify width of scanning window for motifs'
         assert save_name is not None, 'Specify path to save results'
+
+        adata_path = str(adata_path)
+        save_name = str(save_name)
 
         logger.info('Starting data processing')
         network = Network(adata_path, timepoints, genome, time_var=time_var, scan_width=scan_width)
@@ -34,4 +37,5 @@ def _tangerine_pipeline(
         logger.info('Logging completed.')
 
     if "visualise" == pipeline_step:
+        save_name = str(save_name)
         run_app(timepoints, save_name)

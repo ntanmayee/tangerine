@@ -15,11 +15,11 @@ from scipy.cluster.hierarchy import linkage, fcluster
 import os
 import pathlib
 from tangerine.preprocess.logger import logger
+from sklearn.cluster import KMeans
 
 
 # copied from previous version of gimme motifs repository
 # somehow this has been removed in the lastest update
-
 def default_motifs():
     """Return list of Motif instances from default motif database."""
     config = MotifConfig()
@@ -37,7 +37,17 @@ def default_motifs():
 
 
 class ScannerMotifs(object):
+    """Class to scan motifs in specified region of genome
+    """
     def __init__(self, genome, n_cpus=1, fpr=0.02, scan_width=5000) -> None:
+        """Constructor for ScannerMotifs class
+
+        Args:
+            genome (str): Genome which will be used for scanning (currently supports mm10 and hg19)
+            n_cpus (int, optional): Number of CPU cores to use. Defaults to 1.
+            fpr (float, optional): False positive rate. Defaults to 0.02.
+            scan_width (int, optional): Width of genomic region upstream of promoter to scan (in bp). Defaults to 5000.
+        """
         self.genome = genome
 
         self.scanner_object = Scanner(ncpus=n_cpus)
@@ -51,6 +61,11 @@ class ScannerMotifs(object):
         self.all_tfs = self.get_all_motifs()
 
     def get_all_motifs(self):
+        """Makes a consolidated set of TFs in the database
+
+        Returns:
+            list: List of consolidated TFs in the database
+        """
         all_tfs = []
 
         for motif in self.motifs:
@@ -62,6 +77,16 @@ class ScannerMotifs(object):
         return all_tfs
 
     def scan_motifs_single(self, chr_name, start, strand):
+        """Scan for TF motifs upstream of a single gene
+
+        Args:
+            chr_name (str): Chromosome name
+            start (int): start position in bp
+            strand (int): strandedness of the gene  
+
+        Returns:
+            pandas DataFrame: Results of scan in dataframe
+        """
         peakstr = f'{chr_name}_{start - (self.scan_width * strand)}_{start}'
         target_sequences = peak2fasta(peak_ids=[peakstr], ref_genome=self.genome)
         scanned_df = scan_dna_for_motifs(scanner_object=self.scanner_object, motifs_object=self.motifs, 
@@ -90,13 +115,44 @@ class ScannerMotifs(object):
         return tf_list
     
     def run_single_scan(self, chr_name, start, strand, score=None, include_indirect=False):
+        """Run single scan and return list of TFs found
+
+        Args:
+            chr_name (str): Chromosome name
+            start (int): start position
+            strand (int): strandedness (-1 or 1)
+            score (float, optional): Threshold score to filter. Defaults to None.
+            include_indirect (bool, optional): Whether or not to include indirect TF binding sites. Defaults to False.
+
+        Returns:
+            list: List of TFs whose motif was found in the region
+        """
         scanned_df = self.scan_motifs_single(chr_name, start, strand)
         tf_list = self.get_filtered_tfs(scanned_df, score, include_indirect)
         return tf_list
 
 
 class Network(object):
-    def __init__(self, path_to_adata, timepoints, genome, time_var, n_pcs=35, n_neighbors=100, scan_width=10000) -> None:
+    """Class to estimate TF-TF and TF-gene networks
+    """
+    def __init__(self, path_to_adata, timepoints, genome, time_var, n_pcs=35, n_neighbors=100, scan_width=10000, use_metacells=True, min_cells_for_metacell=200, cells_per_metacell=50) -> None:
+        """Constructor for Network class
+
+        Args:
+            path_to_adata (str): Path to adata object
+            timepoints (list): List of timepoints to analyse
+            genome (str): Genome of organism
+            time_var (str): Column name in adata.obs denoting time
+            n_pcs (int, optional): Number of principal components to use. Defaults to 35.
+            n_neighbors (int, optional): Number of neighbours for KNN graph. Defaults to 100.
+            scan_width (int, optional): Width of scanning window for motifs. Defaults to 10000.
+            use_metacells (bool): If True, tries to aggregate cells to fix dropout.
+            min_cells_for_metacell (int): Threshold. If n_cells < this, use RAW data.
+            cells_per_metacell (int): Target grain size (e.g., 50 cells -> 1 metacell).
+
+        Raises:
+            NotImplementedError: If unknown genome is given, raises this error
+        """
         if genome in ['mm10', 'hg19']:
             self.genome = genome
             logger.info(f'{self.genome} selected')
@@ -109,8 +165,17 @@ class Network(object):
         self.n_neighbors = n_neighbors
         self.timepoints = timepoints
         self.networks = {t:nx.DiGraph() for t in self.timepoints}
+
+        self.use_metacells = use_metacells
+        self.min_cells_for_metacell = min_cells_for_metacell
+        self.cells_per_metacell = cells_per_metacell
+        self.metacell_cache = {}
         
         self.preprocess_adata()
+
+        if self.use_metacells:
+            self.generate_native_metacells()
+
         self.scanner = ScannerMotifs(self.genome, scan_width=scan_width)
 
     def __str__(self) -> str:
@@ -121,6 +186,11 @@ class Network(object):
         return self.__str__()
 
     def preprocess_adata(self):
+        """Read and preprocess AnnData object
+
+        Raises:
+            NotImplementedError: Raised if unable to read single cell data
+        """
         if self.path_to_adata.endswith('.h5ad'):
             self.adata = sc.read_h5ad(self.path_to_adata)
             logger.info('Succesfully read in adata')
@@ -128,8 +198,19 @@ class Network(object):
             raise NotImplementedError('Cannot read single cell data file.')
         
         # check if pca and umap already exists, otherwise preprocess
-        if 'pca' not in self.adata.uns.keys() or 'umap' not in self.adata.uns.keys():
-            # count normalization to 10,000 reads per cell 
+        sc.pp.calculate_qc_metrics(self.adata, inplace=True)
+
+        try:
+            if 'pca' not in self.adata.uns.keys() or 'umap' not in self.adata.uns.keys():
+                # count normalization to 10,000 reads per cell 
+                sc.pp.normalize_total(self.adata, target_sum=1e4)
+                self.adata.raw = self.adata.copy()
+
+                sc.pp.log1p(self.adata)
+                sc.tl.pca(self.adata, svd_solver='arpack')
+                sc.pp.neighbors(self.adata, n_pcs=self.n_pcs, metric='euclidean', n_neighbors=self.n_neighbors)
+                sc.tl.umap(self.adata)
+        except:
             sc.pp.normalize_total(self.adata, target_sum=1e4)
             self.adata.raw = self.adata.copy()
 
@@ -137,6 +218,63 @@ class Network(object):
             sc.tl.pca(self.adata, svd_solver='arpack')
             sc.pp.neighbors(self.adata, n_pcs=self.n_pcs, metric='euclidean', n_neighbors=self.n_neighbors)
             sc.tl.umap(self.adata)
+    
+    def generate_native_metacells(self):
+        """Implementation of Metacells using K-Means"""
+        logger.info("Starting Native Metacell Aggregation...")
+        
+        for time in self.timepoints:
+            subset = self.adata[self.adata.obs[self.time_var] == time].copy()
+            n_cells = subset.n_obs
+            
+            if n_cells < self.min_cells_for_metacell:
+                logger.warning(f"Timepoint {time}: {n_cells} cells < threshold ({self.min_cells_for_metacell}). Using RAW cells.")
+                self.metacell_cache[time] = subset
+                continue
+                
+            n_metacells = max(2, int(n_cells / self.cells_per_metacell))
+            logger.info(f"Timepoint {time}: Aggregating {n_cells} cells -> {n_metacells} Metacells (K-Means).")
+            
+            try:
+                if 'X_pca' not in subset.obsm.keys():
+                    sc.tl.pca(subset)
+                
+                kmeans = KMeans(n_clusters=n_metacells, random_state=42, n_init=10)
+                clusters = kmeans.fit_predict(subset.obsm['X_pca'])
+                subset.obs['metacell_id'] = clusters.astype(str)
+                
+                # Aggregate Counts (Sum)
+                # We group by the new cluster ID and sum the raw counts
+                # Note: Assuming subset.X contains log-normalized data, we should ideally sum RAW counts.
+                # If .raw exists, use it. Else, un-log if possible or sum normalized (less ideal but workable).
+                
+                if subset.raw is not None:
+                    raw_df = pd.DataFrame(subset.raw.X.toarray() if hasattr(subset.raw.X, 'toarray') else subset.raw.X, 
+                                          index=subset.obs_names, columns=subset.raw.var_names)
+                else:
+                    # Fallback: Use .X (warn user if it looks logged)
+                    data_mat = subset.X.toarray() if hasattr(subset.X, 'toarray') else subset.X
+                    if data_mat.max() < 20: 
+                        # Crude check for log data. Exponentiate to get approx counts back.
+                        data_mat = np.expm1(data_mat)
+                    raw_df = pd.DataFrame(data_mat, index=subset.obs_names, columns=subset.var_names)
+                
+                # Group by Metacell ID and Sum
+                aggregated_df = raw_df.groupby(subset.obs['metacell_id']).sum()
+                
+                # Create New AnnData
+                meta_adata = sc.AnnData(aggregated_df)
+                meta_adata.obs[self.time_var] = time # Restore time label
+                
+                # Normalize the new Metacells
+                sc.pp.normalize_total(meta_adata, target_sum=1e4)
+                sc.pp.log1p(meta_adata)
+                
+                self.metacell_cache[time] = meta_adata
+                
+            except Exception as e:
+                logger.error(f"Metacell aggregation failed for {time}: {e}. Fallback to Raw.")
+                self.metacell_cache[time] = subset
 
     def filter_selected_tfs(self, tf_list, dropout_threshold=50):
         filtered_tfs = []
@@ -161,6 +299,20 @@ class Network(object):
         return filtered_tfs
 
     def run_single_gene(self, gene_name, chr_name, start, strand, score=None, include_indirect=False, dropout_threshold=50):
+        """Run network inference for a single gene - find all TFs that regulate this gene
+
+        Args:
+            gene_name (str): Name of the gene
+            chr_name (str): Chromosome number
+            start (int): Starting position in bp
+            strand (int): Strandedness 
+            score (float, optional): Minimum score to threshold TF match. Defaults to None.
+            include_indirect (bool, optional): Whether to include indirect TF motifs. Defaults to False.
+            dropout_threshold (float, optional): Dropout threshold to filter, only those genes lower than this will be chosen. Defaults to 50.
+
+        Returns:
+            tuple: returns two dataframes for coefficients and correlations
+        """
         assert gene_name in self.adata.var.index, f'Gene {gene_name} not found in self.adata'
         assert chr_name not in self.scanner.all_tfs, 'Target gene cannot be a transcription factor'
 
@@ -174,40 +326,78 @@ class Network(object):
         if len(tf_list) < 1:
             return None, None
 
-        correlation_df = pd.DataFrame(index=tf_list)    
-        coefficients_df = pd.DataFrame(index=tf_list)
+        correlation_df = pd.DataFrame(index=tf_list, columns=self.timepoints)    
+        coefficients_df = pd.DataFrame(index=tf_list, columns=self.timepoints)
 
         for time in self.timepoints:
-            data_df = sc.get.obs_df(self.adata, [gene_name] + tf_list, use_raw=True)
-            data_df = data_df[data_df.index.map(lambda x: time in x)]
+            if self.use_metacells and time in self.metacell_cache:
+                current_adata = self.metacell_cache[time]
+            else:
+                current_adata = self.adata[self.adata.obs[self.time_var] == time]
+
+            valid_cols = [g for g in ([gene_name] + tf_list) if g in current_adata.var_names]
+            if gene_name not in valid_cols:
+                continue
+
+            # data_df = sc.get.obs_df(self.adata, [gene_name] + tf_list, use_raw=True)
+            # data_df = data_df[data_df.index.map(lambda x: time in x)]
+            data_df = sc.get.obs_df(current_adata, valid_cols, use_raw=False)
+
+            if len(data_df) < 5: # Safety check
+                continue
             
-            # compute correlations
-            correlation_df[time] = data_df.corr(method='spearman')[gene_name]
-
-            # compute coefficients
-            X_train, X_test, y_train, y_test = train_test_split(data_df[tf_list], data_df[gene_name], test_size=0.1, random_state=29)
-
-            model = Ridge()
-            model.fit(X_train, y_train)
+            if gene_name in data_df.columns:
+                # Calculate correlation for this timepoint
+                corr_series = data_df.corr(method='spearman')[gene_name]
+                # Assign it to the dataframe
+                # We use intersection to ensure we only assign TFs that exist in this batch
+                common_tfs = corr_series.index.intersection(tf_list)
+                correlation_df.loc[common_tfs, time] = corr_series[common_tfs]
             
-            coefficients_df[time] = list(model.coef_)
-            model_score = model.score(X_test, y_test)
+            # Use intersect of tf_list and valid columns
+            valid_tfs = [tf for tf in tf_list if tf in valid_cols]
+            
+            if len(valid_tfs) > 0:
+                X = data_df[valid_tfs]
+                y = data_df[gene_name]
+                
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=29)
 
-            # update networkx object with correlation and coefficients
-            network = self.networks[time]
-            for tf in tf_list:
-                network.add_edge(tf, gene_name, correlation=correlation_df.loc[tf][time], coefficient=coefficients_df.loc[tf][time])
-        
-            # set model score as node attribute
-            nx.set_node_attributes(network, {gene_name: {'score': model_score}})
+                model = Ridge()
+                model.fit(X_train, y_train)
+                
+                # Store coefficients (careful with alignment if some TFs missing)
+                for i, tf in enumerate(valid_tfs):
+                    coefficients_df.loc[tf, time] = model.coef_[i]
+                    
+                # Store score
+                network = self.networks[time]
+                nx.set_node_attributes(network, {gene_name: {'score': model.score(X_test, y_test)}})
+                
+                # Add edges
+                for tf in valid_tfs:
+                    corr = correlation_df.loc[tf, time] if tf in correlation_df.index else 0
+                    coef = float(coefficients_df.loc[tf, time])
+                    network.add_edge(tf, gene_name, correlation=corr, coefficient=coef)
 
         return correlation_df, coefficients_df
     
     def check_path_exists(self, path_name):
+        """Check if given path exists, if not create it
+
+        Args:
+            path_name (str): path
+        """
         path = pathlib.Path(path_name)
         path.mkdir(parents=True, exist_ok=True)
 
     def run_all_genes(self, save_path, dropout_threshold=50):
+        """Run motif search for all genes
+
+        Args:
+            save_path (str): Path to save results
+            dropout_threshold (int, optional): Maximum dropout value for genes. Defaults to 50.
+        """
         logger.info('Runing for all genes...')
         self.check_path_exists(save_path)
 
@@ -224,6 +414,14 @@ class Network(object):
         print(f'Total genes selected: {len(result_df)}')
 
         def run_gene_pandas(row):
+            """Mini function to use pandas apply function
+
+            Args:
+                row: Row from pandas DataFrame
+
+            Returns:
+                list: list of TF whose motif was found
+            """
             start = int(float(row['genomic_pos.start']))
             strand = int(row['genomic_pos.strand'])
             return self.run_single_gene(row.symbol, f'chr{row["genomic_pos.chr"]}', start, strand)
@@ -237,6 +435,15 @@ class Network(object):
         logger.info('Saved result graphs into file.')
 
     def run_tf_correlation(self, save_path, dropout_threshold=50):
+        """_summary_
+
+        Args:
+            save_path (_type_): _description_
+            dropout_threshold (int, optional): _description_. Defaults to 50.
+
+        Returns:
+            _type_: _description_
+        """
         self.check_path_exists(save_path)
 
         def filter_selected_tfs(tf_list, dropout_threshold=50):
@@ -260,7 +467,8 @@ class Network(object):
             return filtered_tfs
 
         filt_tfs = filter_selected_tfs(self.scanner.all_tfs, dropout_threshold)
-        
+        logger.info(f'Number of filtered TFs: {len(filt_tfs)}')
+
         # compute correlation
         logger.info('Computing correlation among TFs...')
         corr_dfs = {}

@@ -14,6 +14,7 @@ conda config --add channels conda-forge
 conda create -n tang python=3.10 scanpy python-igraph leidenalg typer poetry pysam=0.22 bioconda::htseq conda-forge::pyarrow
 
 pip install dash gimmemotifs --no-cache-dir
+conda install dash-bootstrap-components
 poetry install --only-root
 ```
 
