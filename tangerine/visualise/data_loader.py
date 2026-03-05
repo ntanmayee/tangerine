@@ -48,7 +48,7 @@ class DataLoader(object):
         return networks
 
     def get_out_edges_dataframe(self, tf_name, attr_name, threshold=0.1):
-        index = [v for _,v in self.networks['0h'].out_edges(tf_name)]
+        index = [v for _,v in self.networks[self.timepoints[0]].out_edges(tf_name)]
         data_df = pd.DataFrame(index=index)
 
         for time in self.timepoints:
@@ -61,7 +61,7 @@ class DataLoader(object):
         return data_df[np.abs(data_df.avg) > threshold]
 
     def get_in_edges_dataframe(self, gene_name, attr_name, threshold=0.05):
-        index = [u for u,_ in self.networks['0h'].in_edges(gene_name)]
+        index = [u for u,_ in self.networks[self.timepoints[0]].in_edges(gene_name)]
         data_df = pd.DataFrame(index=index)
         
         for time in self.timepoints:
