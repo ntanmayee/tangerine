@@ -27,3 +27,4 @@ tangerine/preprocess/run.sh
 outs/
 tangerine/visualise/__pycache__/
 run.sh
+qsub_outs/

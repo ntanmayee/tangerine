@@ -18,6 +18,10 @@ def make_app_layout(app, tf_list_picker, gene_list, timepoints):
         }
     }
 
+    t0 = timepoints[0]
+    tf_chosen = tf_list_picker[0]
+    gene_chosen = gene_list[0]
+
     app.layout = dbc.Container([
         dbc.Row([
             html.H1('Tangerine: Visualising Dynamic Gene Regulation'),
@@ -33,14 +37,14 @@ def make_app_layout(app, tf_list_picker, gene_list, timepoints):
                     dbc.Col([
                         html.H5('Heatmap', style={"margin-top": "20px"}),
                         html.P('Spearman correlation with all other genes. Select a timepoint from the dropdown menu.'),
-                        dcc.Dropdown(timepoints, '0h', id='time-picker'),
+                        dcc.Dropdown(timepoints, t0, id='time-picker'),
                         dcc.Graph(figure={}, id='tf-heatmap'),
                         dcc.Store(id='tick-values')
                     ]),
                     dbc.Col([
                         html.H5('Radial Ego Network', style={"margin-top": "20px"}),
                         html.P('Inspect correlation of one TF with the rest. Select a TF from the dropdown menu.'),
-                        dcc.Dropdown(tf_list_picker, 'Pou5f1', id='tf-picker-radial'),
+                        dcc.Dropdown(tf_list_picker, tf_chosen, id='tf-picker-radial'),
                         dcc.Graph(figure={}, id='tf-tf', config={'displayModeBar': False, 'scrollZoom': False})
                     ]),
                 ]),
@@ -56,14 +60,14 @@ def make_app_layout(app, tf_list_picker, gene_list, timepoints):
                 dbc.Row([
                     html.H5('TF view'),
                     html.P('Select a TF from the dropdown menu.'),
-                    dcc.Dropdown(tf_list_picker, 'Pou5f1', id='tf-picker'),
+                    dcc.Dropdown(tf_list_picker, tf_chosen, id='tf-picker'),
                     dcc.Graph(figure={}, id='tf-correlation'),
                     html.Pre(id='selected-genes', style=styles['pre'])
                 ]),
                 dbc.Row([
                     html.H5('Gene view'),
                     html.P('Select a gene from the dropdown menu.'),
-                    dcc.Dropdown(gene_list, 'L1td1', id='gene-picker'),
+                    dcc.Dropdown(gene_list, gene_list, id='gene-picker'),
                     dcc.Graph(figure={}, id='gene-correlation'),
                     html.Pre(id='selected-tfs', style=styles['pre'])
                 ]),
@@ -86,20 +90,21 @@ def run_app(timepoints, base_path):
         for i, (r, g, b, a) in enumerate(rgba_colors)
     ]
 
-    # tick_names = list(data_loader.tf_correlation_dfs['0h'].index)
+    # tick_names = list(data_loader.tf_correlation_dfs[t0].index)
 
     # parcat init
     color_parcat = np.zeros(len(data_loader.tf_louvain), dtype='uint8')
     colorscale_parcat = [[0, 'gray'], [1, 'firebrick']]
 
+    t0 = timepoints[0]
     tf_list_picker = []
-    for node in data_loader.networks['0h']:
-        if len(data_loader.networks['0h'].out_edges(node)) > 0:
+    for node in data_loader.networks[t0]:
+        if len(data_loader.networks[t0].out_edges(node)) > 0:
             tf_list_picker.append(node)
                 
     gene_list = []
-    for node in data_loader.networks['0h']:
-        if len(data_loader.networks['0h'].in_edges(node)) > 0:
+    for node in data_loader.networks[t0]:
+        if len(data_loader.networks[t0].in_edges(node)) > 0:
             gene_list.append(node)
 
     # Initialize the app
@@ -227,8 +232,8 @@ def run_app(timepoints, base_path):
     )
     def update_tf_tf(gene):
         corr_df = data_loader.get_tf_corr_df(gene, data_loader.tf_list)
-        print(corr_df.sort_values('0h', key=abs, ascending=False).head())
-        tf_list = list(corr_df.sort_values('0h', ascending=False).index)
+        print(corr_df.sort_values(t0, key=abs, ascending=False).head())
+        tf_list = list(corr_df.sort_values(t0, ascending=False).index)
         print(tf_list)
         tf_list.remove(gene)
 
@@ -296,28 +301,20 @@ def run_app(timepoints, base_path):
     def update_tf_graph(tf_name):
         df_coef = data_loader.get_out_edges_dataframe(tf_name, 'coefficient')
         values_range_coef = (np.min(df_coef), np.max(df_coef))
+
+        dims = [
+            dict(
+                range = values_range_coef,
+                label = f'{t} coefficient',
+                values = df_coef[t]
+            )
+            for t in timepoints
+        ]
         
         fig = go.Figure(data=
                         go.Parcoords(
                             line_color = '#3182bd',
-                            dimensions = list([
-                                dict(range = values_range_coef,
-                                    label = '0h coefficient',
-                                    values = df_coef['0h']
-                                    ),
-                                dict(range = values_range_coef,
-                                    label = '6h coefficient',
-                                    values = df_coef['6h']
-                                    ),
-                                dict(range = values_range_coef,
-                                    label = '18h coefficient',
-                                    values = df_coef['18h']
-                                    ),
-                                dict(range = values_range_coef,
-                                    label = '54h coefficient',
-                                    values = df_coef['54h']
-                                    ),
-                            ])
+                            dimensions = dims
                         )
                     )
 
@@ -369,44 +366,20 @@ def run_app(timepoints, base_path):
         df_coef = data_loader.get_in_edges_dataframe(gene_name, 'coefficient')
         values_range_corr = (np.min(df_corr), np.max(df_corr))
         values_range_coef = (np.min(df_coef), np.max(df_coef))
+
+        dims = [
+            dict(
+                range = values_range_corr,
+                label = f'{t} correlation',
+                values = df_corr[t]
+            )
+            for t in timepoints
+        ]
         
         fig = go.Figure(data=
                         go.Parcoords(
                             line_color = '#3182bd',
-                            dimensions = list([
-                                # dict(range = values_range_coef,
-                                #     label = '0h coefficient',
-                                #     values = df_coef['0h']
-                                #     ),
-                                # dict(range = values_range_coef,
-                                #     label = '6h coefficient',
-                                #     values = df_coef['6h']
-                                #     ),
-                                # dict(range = values_range_coef,
-                                #     label = '18h coefficient',
-                                #     values = df_coef['18h']
-                                #     ),
-                                # dict(range = values_range_coef,
-                                #     label = '54h coefficient',
-                                #     values = df_coef['54h']
-                                #     ),
-                                dict(range = values_range_corr,
-                                    label = '0h correlation',
-                                    values = df_corr['0h']
-                                    ),
-                                dict(range = values_range_corr,
-                                    label = '6h correlation',
-                                    values = df_corr['6h']
-                                    ),
-                                dict(range = values_range_corr,
-                                    label = '18h correlation',
-                                    values = df_corr['18h']
-                                    ),
-                                dict(range = values_range_corr,
-                                    label = '54h correlation',
-                                    values = df_corr['54h']
-                                    ),
-                            ])
+                            dimensions = dims
                         )
                     )
 

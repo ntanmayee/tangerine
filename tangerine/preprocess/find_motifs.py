@@ -299,86 +299,135 @@ class Network(object):
         return filtered_tfs
 
     def run_single_gene(self, gene_name, chr_name, start, strand, score=None, include_indirect=False, dropout_threshold=50):
-        """Run network inference for a single gene - find all TFs that regulate this gene
-
-        Args:
-            gene_name (str): Name of the gene
-            chr_name (str): Chromosome number
-            start (int): Starting position in bp
-            strand (int): Strandedness 
-            score (float, optional): Minimum score to threshold TF match. Defaults to None.
-            include_indirect (bool, optional): Whether to include indirect TF motifs. Defaults to False.
-            dropout_threshold (float, optional): Dropout threshold to filter, only those genes lower than this will be chosen. Defaults to 50.
-
-        Returns:
-            tuple: returns two dataframes for coefficients and correlations
+        """
+        Run network inference for a single gene.
+        Updates:
+        - Uses 'Union' filtering: Candidate TFs are kept if they pass dropout in ANY time point.
+        - Fills NaN correlations with 0.
+        - Skips Ridge regression for TFs that are completely silenced in a specific time point.
         """
         assert gene_name in self.adata.var.index, f'Gene {gene_name} not found in self.adata'
         assert chr_name not in self.scanner.all_tfs, 'Target gene cannot be a transcription factor'
 
+        # 1. Motif Scan to get initial candidates
         try:
-            tf_list = self.scanner.run_single_scan(chr_name, start, strand, score, include_indirect)
-        except:
-            logger.info(f'Some error for gene {gene_name}, {chr_name}')
+            raw_tf_list = self.scanner.run_single_scan(chr_name, start, strand, score, include_indirect)
+        except Exception as e:
+            logger.warning(f'Scanner error for gene {gene_name}, {chr_name}: {e}')
             return pd.DataFrame(), pd.DataFrame()
-        tf_list = self.filter_selected_tfs(tf_list, dropout_threshold)
 
-        if len(tf_list) < 1:
+        if len(raw_tf_list) < 1:
             return None, None
 
-        correlation_df = pd.DataFrame(index=tf_list, columns=self.timepoints)    
-        coefficients_df = pd.DataFrame(index=tf_list, columns=self.timepoints)
+        # 2. Relaxed Filtering (Union of Time-Specific Leaders)
+        # We check if a TF passes the dropout threshold in AT LEAST ONE time point.
+        valid_tfs_set = set()
+        
+        # Pre-check which TFs are in the adata object at all
+        possible_tfs = [tf for tf in raw_tf_list if tf in self.adata.var_names]
+        
+        if not possible_tfs:
+             return None, None
 
         for time in self.timepoints:
+            subset = self.adata[self.adata.obs[self.time_var] == time]
+            
+            # Get subset of data for these TFs
+            # Using sparse check for speed
+            X_subset = subset[:, possible_tfs].X
+            n_cells = X_subset.shape[0]
+            
+            if hasattr(X_subset, "getnnz"):
+                n_expressed = X_subset.getnnz(axis=0)
+            else:
+                n_expressed = (X_subset != 0).sum(axis=0)
+                
+            pct_dropout = 100 * (1 - (n_expressed / n_cells))
+            
+            # Keep TFs that pass threshold in this specific time point
+            passing_indices = np.where(pct_dropout <= dropout_threshold)[0]
+            passed_tfs = [possible_tfs[i] for i in passing_indices]
+            valid_tfs_set.update(passed_tfs)
+            
+        final_tf_list = list(valid_tfs_set)
+        
+        if len(final_tf_list) < 1:
+            return None, None
+
+        # 3. Initialize Results with 0.0 (Handles silenced factors automatically)
+        correlation_df = pd.DataFrame(0.0, index=final_tf_list, columns=self.timepoints)    
+        coefficients_df = pd.DataFrame(0.0, index=final_tf_list, columns=self.timepoints)
+
+        # 4. Compute Stats Per Timepoint
+        for time in self.timepoints:
+            # Handle Metacells if enabled
             if self.use_metacells and time in self.metacell_cache:
                 current_adata = self.metacell_cache[time]
             else:
                 current_adata = self.adata[self.adata.obs[self.time_var] == time]
 
-            valid_cols = [g for g in ([gene_name] + tf_list) if g in current_adata.var_names]
+            # Columns to fetch: Gene + Valid TFs that exist in this time point
+            valid_cols = [g for g in ([gene_name] + final_tf_list) if g in current_adata.var_names]
+            
             if gene_name not in valid_cols:
                 continue
 
-            # data_df = sc.get.obs_df(self.adata, [gene_name] + tf_list, use_raw=True)
-            # data_df = data_df[data_df.index.map(lambda x: time in x)]
             data_df = sc.get.obs_df(current_adata, valid_cols, use_raw=False)
 
-            if len(data_df) < 5: # Safety check
+            if len(data_df) < 5: 
                 continue
             
+            # --- A. Correlation ---
             if gene_name in data_df.columns:
-                # Calculate correlation for this timepoint
                 corr_series = data_df.corr(method='spearman')[gene_name]
-                # Assign it to the dataframe
-                # We use intersection to ensure we only assign TFs that exist in this batch
-                common_tfs = corr_series.index.intersection(tf_list)
+                # FIX: Fill NaNs (from 0-variance TFs) with 0.0
+                corr_series = corr_series.fillna(0.0)
+                
+                common_tfs = corr_series.index.intersection(final_tf_list)
                 correlation_df.loc[common_tfs, time] = corr_series[common_tfs]
             
-            # Use intersect of tf_list and valid columns
-            valid_tfs = [tf for tf in tf_list if tf in valid_cols]
+            # --- B. Ridge Regression ---
+            # Filter predictors: Only use TFs available in this batch
+            available_predictors = [tf for tf in final_tf_list if tf in valid_cols]
             
-            if len(valid_tfs) > 0:
-                X = data_df[valid_tfs]
+            if len(available_predictors) > 0:
+                X = data_df[available_predictors]
                 y = data_df[gene_name]
                 
-                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=29)
-
-                model = Ridge()
-                model.fit(X_train, y_train)
+                # CRITICAL: Identify "Active" TFs for this specific time point
+                # If a TF is all 0s here, we must NOT regress on it (it's noise/singular).
+                # We leave its coefficient as 0.0 (from initialization).
+                active_tfs = X.columns[(X != 0).any(axis=0)].tolist()
                 
-                # Store coefficients (careful with alignment if some TFs missing)
-                for i, tf in enumerate(valid_tfs):
-                    coefficients_df.loc[tf, time] = model.coef_[i]
+                if len(active_tfs) > 0:
+                    X_subset = X[active_tfs]
                     
-                # Store score
-                network = self.networks[time]
-                nx.set_node_attributes(network, {gene_name: {'score': model.score(X_test, y_test)}})
-                
-                # Add edges
-                for tf in valid_tfs:
-                    corr = correlation_df.loc[tf, time] if tf in correlation_df.index else 0
-                    coef = float(coefficients_df.loc[tf, time])
-                    network.add_edge(tf, gene_name, correlation=corr, coefficient=coef)
+                    try:
+                        X_train, X_test, y_train, y_test = train_test_split(X_subset, y, test_size=0.1, random_state=29)
+
+                        model = Ridge()
+                        model.fit(X_train, y_train)
+                        
+                        # Store coefficients ONLY for the active TFs
+                        for i, tf in enumerate(active_tfs):
+                            coefficients_df.loc[tf, time] = float(model.coef_[i])
+                            
+                        # Store model score on the gene node
+                        network = self.networks[time]
+                        nx.set_node_attributes(network, {gene_name: {'score': float(model.score(X_test, y_test))}})
+                        
+                        # Add edges to graph
+                        for tf in active_tfs:
+                            corr = float(correlation_df.loc[tf, time])
+                            coef = float(coefficients_df.loc[tf, time])
+                            
+                            # Optional: Filter tiny edges to save space? 
+                            # Currently keeping all to match original logic, but casting to float.
+                            network.add_edge(tf, gene_name, correlation=corr, coefficient=coef)
+                            
+                    except Exception as e:
+                        logger.warning(f"Regression failed for {gene_name} at {time}: {e}")
+                        continue
 
         return correlation_df, coefficients_df
     
@@ -446,28 +495,68 @@ class Network(object):
         """
         self.check_path_exists(save_path)
 
-        def filter_selected_tfs(tf_list, dropout_threshold=50):
-            filtered_tfs = []
+        logger.info('Filtering TFs based on time-specific dropout...')
+        
+        # 1. Start with all possible TFs from the scanner
+        all_candidates = self.scanner.all_tfs
+        valid_tfs = set()
 
-            for tf in tf_list:
-                try:
-                    dropout = self.adata.var.loc[tf]['pct_dropout_by_counts'] 
-                    if dropout <= dropout_threshold:
-                        filtered_tfs.append(tf)
-                except KeyError:
-                    pass
-
-                try:
-                    dropout = self.adata.var.loc[tf.upper()]['pct_dropout_by_counts'] 
-                    if dropout <= dropout_threshold:
-                        filtered_tfs.append(tf)
-                except KeyError:
-                    pass
+        for time in self.timepoints:
+            # 2. Get the subset of raw cells for this time point
+            subset = self.adata[self.adata.obs[self.time_var] == time]
             
-            return filtered_tfs
+            # 3. Find which candidate TFs are actually in the dataset
+            present_tfs = [tf for tf in all_candidates if tf in subset.var_names]
+            
+            if not present_tfs:
+                continue
 
-        filt_tfs = filter_selected_tfs(self.scanner.all_tfs, dropout_threshold)
-        logger.info(f'Number of filtered TFs: {len(filt_tfs)}')
+            # 4. Calculate dropout specifically for this time point
+            X_subset = subset[:, present_tfs].X
+            n_cells = X_subset.shape[0]
+
+            if hasattr(X_subset, "getnnz"):
+                # Sparse matrix: getnnz(0) counts non-zero elements per column
+                n_expressed = X_subset.getnnz(axis=0)
+                pct_dropout = 100 * (1 - (n_expressed / n_cells))
+            else:
+                # Dense matrix (fallback)
+                n_zeros = (X_subset == 0).sum(axis=0)
+                pct_dropout = 100 * (n_zeros / n_cells)
+
+            # 5. Identify TFs that are good quality (>50% expression) in THIS time point
+            # np.where returns indices, so we map them back to TF names
+            passing_indices = np.where(pct_dropout <= dropout_threshold)[0]
+            passed_tfs = [present_tfs[i] for i in passing_indices]
+            
+            # 6. Add to the "Union" set
+            valid_tfs.update(passed_tfs)
+
+        filt_tfs = list(valid_tfs)
+        logger.info(f'Number of filtered TFs (Union across time): {len(filt_tfs)}')
+
+        # def filter_selected_tfs(tf_list, dropout_threshold=50):
+        #     filtered_tfs = []
+
+        #     for tf in tf_list:
+        #         try:
+        #             dropout = self.adata.var.loc[tf]['pct_dropout_by_counts'] 
+        #             if dropout <= dropout_threshold:
+        #                 filtered_tfs.append(tf)
+        #         except KeyError:
+        #             pass
+
+        #         try:
+        #             dropout = self.adata.var.loc[tf.upper()]['pct_dropout_by_counts'] 
+        #             if dropout <= dropout_threshold:
+        #                 filtered_tfs.append(tf)
+        #         except KeyError:
+        #             pass
+            
+        #     return filtered_tfs
+
+        # filt_tfs = filter_selected_tfs(self.scanner.all_tfs, dropout_threshold)
+        # logger.info(f'Number of filtered TFs: {len(filt_tfs)}')
 
         # compute correlation
         logger.info('Computing correlation among TFs...')
@@ -475,7 +564,7 @@ class Network(object):
         for time in self.timepoints:
             data_df = sc.get.obs_df(self.adata, filt_tfs + [self.time_var], use_raw=False)
             data_df = data_df[data_df[self.time_var] == time].drop(self.time_var, axis=1)
-            corr_dfs[time] = data_df.corr('spearman')
+            corr_dfs[time] = data_df.corr('spearman').fillna(0)
 
             # write to file
             corr_dfs[time].to_csv(join(save_path, f'tf_tf_{time}.csv'))
