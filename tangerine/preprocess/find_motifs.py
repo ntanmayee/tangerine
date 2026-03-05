@@ -484,113 +484,102 @@ class Network(object):
         logger.info('Saved result graphs into file.')
 
     def run_tf_correlation(self, save_path, dropout_threshold=50):
-        """_summary_
-
-        Args:
-            save_path (_type_): _description_
-            dropout_threshold (int, optional): _description_. Defaults to 50.
-
-        Returns:
-            _type_: _description_
+        """
+        Computes TF-TF correlation matrices, orders them based on t0, 
+        and clusters them dynamically across all timepoints.
         """
         self.check_path_exists(save_path)
 
-        logger.info('Filtering TFs based on time-specific dropout...')
+        logger.info('Filtering TFs based on time-specific dropout (Union strategy)...')
         
         # 1. Start with all possible TFs from the scanner
         all_candidates = self.scanner.all_tfs
         valid_tfs = set()
 
         for time in self.timepoints:
-            # 2. Get the subset of raw cells for this time point
             subset = self.adata[self.adata.obs[self.time_var] == time]
-            
-            # 3. Find which candidate TFs are actually in the dataset
             present_tfs = [tf for tf in all_candidates if tf in subset.var_names]
             
             if not present_tfs:
                 continue
 
-            # 4. Calculate dropout specifically for this time point
             X_subset = subset[:, present_tfs].X
             n_cells = X_subset.shape[0]
 
             if hasattr(X_subset, "getnnz"):
-                # Sparse matrix: getnnz(0) counts non-zero elements per column
                 n_expressed = X_subset.getnnz(axis=0)
-                pct_dropout = 100 * (1 - (n_expressed / n_cells))
             else:
-                # Dense matrix (fallback)
-                n_zeros = (X_subset == 0).sum(axis=0)
-                pct_dropout = 100 * (n_zeros / n_cells)
-
-            # 5. Identify TFs that are good quality (>50% expression) in THIS time point
-            # np.where returns indices, so we map them back to TF names
+                n_expressed = (X_subset != 0).sum(axis=0)
+                
+            pct_dropout = 100 * (1 - (n_expressed / n_cells))
             passing_indices = np.where(pct_dropout <= dropout_threshold)[0]
             passed_tfs = [present_tfs[i] for i in passing_indices]
             
-            # 6. Add to the "Union" set
             valid_tfs.update(passed_tfs)
 
         filt_tfs = list(valid_tfs)
         logger.info(f'Number of filtered TFs (Union across time): {len(filt_tfs)}')
 
-        # def filter_selected_tfs(tf_list, dropout_threshold=50):
-        #     filtered_tfs = []
+        # --- SAFETY CHECK ---
+        if len(filt_tfs) < 2:
+            logger.error("Not enough TFs passed the dropout filter to perform clustering. Check your threshold or gene names.")
+            return
 
-        #     for tf in tf_list:
-        #         try:
-        #             dropout = self.adata.var.loc[tf]['pct_dropout_by_counts'] 
-        #             if dropout <= dropout_threshold:
-        #                 filtered_tfs.append(tf)
-        #         except KeyError:
-        #             pass
-
-        #         try:
-        #             dropout = self.adata.var.loc[tf.upper()]['pct_dropout_by_counts'] 
-        #             if dropout <= dropout_threshold:
-        #                 filtered_tfs.append(tf)
-        #         except KeyError:
-        #             pass
-            
-        #     return filtered_tfs
-
-        # filt_tfs = filter_selected_tfs(self.scanner.all_tfs, dropout_threshold)
-        # logger.info(f'Number of filtered TFs: {len(filt_tfs)}')
-
-        # compute correlation
+        # 2. Compute Correlation
         logger.info('Computing correlation among TFs...')
         corr_dfs = {}
         for time in self.timepoints:
             data_df = sc.get.obs_df(self.adata, filt_tfs + [self.time_var], use_raw=False)
             data_df = data_df[data_df[self.time_var] == time].drop(self.time_var, axis=1)
+            
+            # Calculate spearman and fill NaNs (from silenced TFs) with 0
             corr_dfs[time] = data_df.corr('spearman').fillna(0)
 
-            # write to file
-            corr_dfs[time].to_csv(join(save_path, f'tf_tf_{time}.csv'))
+        # 3. Determine Baseline Visual Ordering (based on t0)
+        logger.info('Determining optimal heatmap ordering based on initial timepoint...')
+        from scipy.cluster.hierarchy import linkage, leaves_list, fcluster
+        
+        t0 = self.timepoints[0]
+        X_t0 = corr_dfs[t0].values
+        
+        # Ward linkage requires Euclidean distance 
+        Z_t0 = linkage(X_t0, method='ward')
+        optimal_order_indices = leaves_list(Z_t0)
+        ordered_tfs = corr_dfs[t0].index[optimal_order_indices]
 
-        logger.info('Clustering TFs...')
-        # cluster using heirarchical clustering
-        cluster_df = pd.DataFrame(index=corr_dfs[self.timepoints[0]].index, columns=self.timepoints)
+        # 4. Reorder, Save, and Cluster ALL timepoints
+        logger.info('Saving ordered correlation matrices and computing dynamic clusters...')
+        cluster_df = pd.DataFrame(index=ordered_tfs, columns=self.timepoints)
 
         for time in self.timepoints:
+            # Reorder rows and columns to match t0 visual baseline
+            corr_dfs[time] = corr_dfs[time].loc[ordered_tfs, ordered_tfs]
+            
+            # Save the ordered matrix
+            corr_dfs[time].to_csv(join(save_path, f'tf_tf_{time}.csv'))
+
+            # Compute clustering for THIS specific timepoint (for the Alluvial Plot)
             X = corr_dfs[time].values
             Z = linkage(X, method='ward')
 
-            # optimise using elbow-like metric for distances
+            # Optimize using elbow-like metric for distances
             distances = Z[:, 2]
             diffs = np.diff(distances)
 
-            max_gap_idx = np.argmax(diffs)
-            num_clusters = len(distances) - max_gap_idx
+            if len(diffs) > 0:
+                max_gap_idx = np.argmax(diffs)
+                num_clusters = max(2, len(distances) - max_gap_idx)
+            else:
+                num_clusters = 2
             
+            # Assign cluster labels based on the dynamic structure of the current timepoint
             cluster_labels = fcluster(Z, t=num_clusters, criterion='maxclust')
             cluster_df.loc[corr_dfs[time].index, time] = cluster_labels
 
+        # 5. Format and Save Cluster Assignments
         for time in self.timepoints:
-            cluster_df[time] = cluster_df[time].apply(lambda x: f'{time}-{x}')
-            logger.debug(cluster_df[time].value_counts())
+            cluster_df[time] = cluster_df[time].apply(lambda x: f'{time}-{int(x) if pd.notnull(x) else 0}')
+            logger.debug(f"Time {time} clusters:\n{cluster_df[time].value_counts()}")
 
-        # write to file
         cluster_df.to_csv(join(save_path, 'louvain_tf.csv'))
-        logger.info('Saved clustering results to file.')
+        logger.info('Saved ordered matrices and dynamic clustering results to file.')

@@ -7,7 +7,7 @@ from tangerine.visualise.data_loader import DataLoader
 from matplotlib import colors
 import matplotlib as mpl
 import itertools as it
-
+from scipy.cluster.hierarchy import linkage, leaves_list  # NEW: imported for on-the-fly visual ordering
 
 def make_app_layout(app, tf_list_picker, gene_list, timepoints):
     # App layout
@@ -19,8 +19,8 @@ def make_app_layout(app, tf_list_picker, gene_list, timepoints):
     }
 
     t0 = timepoints[0]
-    tf_chosen = tf_list_picker[0]
-    gene_chosen = gene_list[0]
+    tf_chosen = tf_list_picker[0] if tf_list_picker else None
+    gene_chosen = gene_list[0] if gene_list else None
 
     app.layout = dbc.Container([
         dbc.Row([
@@ -36,8 +36,22 @@ def make_app_layout(app, tf_list_picker, gene_list, timepoints):
                 dbc.Row([
                     dbc.Col([
                         html.H5('Heatmap', style={"margin-top": "20px"}),
-                        html.P('Spearman correlation with all other genes. Select a timepoint from the dropdown menu.'),
+                        html.P('Spearman correlation with all other TFs. Select a timepoint from the dropdown menu.'),
                         dcc.Dropdown(timepoints, t0, id='time-picker'),
+                        
+                        html.Div([
+                            dbc.RadioItems(
+                                id='heatmap-order',
+                                options=[
+                                    {'label': f'Order by Initial Timepoint ({t0})', 'value': 't0'},
+                                    {'label': 'Order by Current Timepoint', 'value': 'current'}
+                                ],
+                                value='t0',
+                                inline=True,
+                                style={'margin-top': '15px', 'margin-bottom': '5px', 'font-size': '14px'}
+                            )
+                        ]),
+                        
                         dcc.Graph(figure={}, id='tf-heatmap'),
                         dcc.Store(id='tick-values')
                     ]),
@@ -53,7 +67,6 @@ def make_app_layout(app, tf_list_picker, gene_list, timepoints):
                     html.P('Select a region from the heatmap to check how cluster membership changes over time.'),
                     dcc.Graph(figure={}, id='parcat'),
                     dbc.Table(id='output')
-
                 ])
             ]),
             dcc.Tab(label='TF-Gene', children=[
@@ -67,7 +80,7 @@ def make_app_layout(app, tf_list_picker, gene_list, timepoints):
                 dbc.Row([
                     html.H5('Gene view'),
                     html.P('Select a gene from the dropdown menu.'),
-                    dcc.Dropdown(gene_list, gene_list, id='gene-picker'),
+                    dcc.Dropdown(gene_list, gene_chosen, id='gene-picker'),
                     dcc.Graph(figure={}, id='gene-correlation'),
                     html.Pre(id='selected-tfs', style=styles['pre'])
                 ]),
@@ -89,8 +102,6 @@ def run_app(timepoints, base_path):
         [i / 255, f'rgba({int(r*255)},{int(g*255)},{int(b*255)},{a:.3f})']
         for i, (r, g, b, a) in enumerate(rgba_colors)
     ]
-
-    # tick_names = list(data_loader.tf_correlation_dfs[t0].index)
 
     # parcat init
     color_parcat = np.zeros(len(data_loader.tf_louvain), dtype='uint8')
@@ -125,20 +136,17 @@ def run_app(timepoints, base_path):
                         line={'colorscale': colorscale_parcat, 'cmin': 0, 'cmax': 1, 'color': color_parcat, 'shape': 'hspline'}
                     )
             )
-
             return fig
 
         x_range = selectedData['range']['x']
         y_range = selectedData['range']['y']
 
-        # Helper to compute which category centers fall inside selection box
         def get_selected_labels(axis_labels, selected_range):
             selected_labels = []
             for i, label in enumerate(axis_labels):
-                center = i  # Category i is centered at i
+                center = i  
                 left = center - 0.5
                 right = center + 0.5
-                # Check if cell overlaps with selected range
                 if right >= selected_range[0] and left <= selected_range[1]:
                     selected_labels.append(label)
             return selected_labels
@@ -149,10 +157,8 @@ def run_app(timepoints, base_path):
         selected_coords = sorted(list(set(list(selected_x_labels + selected_y_labels))))
 
         new_color = np.zeros(len(data_loader.tf_louvain), dtype='uint8')
-        new_indices = [data_loader.tf_louvain.index.get_loc(tf) for tf in selected_coords]
-        print(f'new_indices: {new_indices}')
+        new_indices = [data_loader.tf_louvain.index.get_loc(tf) for tf in selected_coords if tf in data_loader.tf_louvain.index]
         new_color[new_indices] = 1
-        print(new_color, np.sum(new_color)) 
 
         fig = go.Figure(
             go.Parcats(
@@ -161,7 +167,6 @@ def run_app(timepoints, base_path):
                     )
         )
         return fig
-
 
     @app.callback(
         Output('output', 'children'),
@@ -175,14 +180,12 @@ def run_app(timepoints, base_path):
         x_range = selectedData['range']['x']
         y_range = selectedData['range']['y']
 
-        # Helper to compute which category centers fall inside selection box
         def get_selected_labels(axis_labels, selected_range):
             selected_labels = []
             for i, label in enumerate(axis_labels):
-                center = i  # Category i is centered at i
+                center = i  
                 left = center - 0.5
                 right = center + 0.5
-                # Check if cell overlaps with selected range
                 if right >= selected_range[0] and left <= selected_range[1]:
                     selected_labels.append(label)
             return selected_labels
@@ -191,21 +194,36 @@ def run_app(timepoints, base_path):
         selected_y_labels = get_selected_labels(tick_names, y_range)
 
         selected_coords = sorted(list(set(list(selected_x_labels + selected_y_labels))))
-
-        print("Selected Heatmap Coordinates (x, y):", selected_coords)
-        temp_df = data_loader.tf_louvain.loc[selected_coords]
+        
+        # Filter strictly for existing indices to avoid KeyErrors
+        valid_coords = [c for c in selected_coords if c in data_loader.tf_louvain.index]
+        temp_df = data_loader.tf_louvain.loc[valid_coords].copy()
         temp_df['gene'] = temp_df.index
-        # return f"{len(selected_coords)} TFs selected: {', '.join(selected_coords)}"
         return dbc.Table.from_dataframe(temp_df)
 
-
+    # --- UPDATED CALLBACK: Handles Heatmap Ordering ---
     @callback(
             Output(component_id='tf-heatmap', component_property='figure'),
             Output(component_id='tick-values', component_property='data'),
-            Input(component_id='time-picker', component_property='value')
+            Input(component_id='time-picker', component_property='value'),
+            Input(component_id='heatmap-order', component_property='value') # NEW INPUT
     )
-    def update_tf_heatmap(time):
+    def update_tf_heatmap(time, order_type):
         corr_df, tick_names = data_loader.get_tf_corr_basic(time)
+        
+        # If user wants current timepoint ordering, compute visual structure on the fly
+        if order_type == 'current' and time != timepoints[0]:
+            try:
+                Z = linkage(corr_df.values, method='ward')
+                optimal_order_indices = leaves_list(Z)
+                # Reorder the dataframe and ticks
+                corr_df = corr_df.iloc[optimal_order_indices, optimal_order_indices]
+                tick_names = list(corr_df.columns)
+            except Exception as e:
+                print(f"Clustering failed for visual ordering: {e}")
+                # Fallback to default t0 ordering if it fails
+                pass
+
         fig = go.Figure(
             go.Heatmap(
                 z=corr_df,
@@ -216,7 +234,6 @@ def run_app(timepoints, base_path):
                 zmax=0.3,
                 colorbar=dict(title="Value"),
                 hoverinfo='skip'
-                # hoverongaps=False
             )
         )
         fig.update_layout(
@@ -231,13 +248,14 @@ def run_app(timepoints, base_path):
         Input(component_id='tf-picker-radial', component_property='value')
     )
     def update_tf_tf(gene):
+        if not gene:
+            return go.Figure()
+            
         corr_df = data_loader.get_tf_corr_df(gene, data_loader.tf_list)
-        print(corr_df.sort_values(t0, key=abs, ascending=False).head())
         tf_list = list(corr_df.sort_values(t0, ascending=False).index)
-        print(tf_list)
-        tf_list.remove(gene)
+        if gene in tf_list:
+            tf_list.remove(gene)
 
-        # define coordinates and colours to plot
         offset = 2
         radii = list(range(offset, len(timepoints) +1 + offset))
         radii = [r*3 for r in radii]
@@ -247,7 +265,6 @@ def run_app(timepoints, base_path):
         for angle in np.linspace(0, 360, num=len(tf_list)+1)[:-1]:
             angle_coords.extend([angle] * (len(timepoints)))
 
-        # colours 
         colours = corr_df.loc[tf_list].map(lambda x : colors.to_hex(cmap(divnorm(x)))).to_numpy().flatten()
         corr_values = corr_df.loc[tf_list].to_numpy().flatten()
 
@@ -261,7 +278,7 @@ def run_app(timepoints, base_path):
             
             fig.add_trace(
                 go.Scatter(x = x_coords, y = y_coords, 
-                        mode='lines', line={'color': color},
+                        mode='lines', line={'color': color, 'width': 4},
                         hoverinfo='none'
                         )
             )
@@ -273,12 +290,13 @@ def run_app(timepoints, base_path):
                         )
             )
 
-        max_radius = np.max(r_coords) + 2.5
+        max_radius = np.max(r_coords) + 2.5 if r_coords else 0
 
         for theta, tf in zip(np.linspace(0, 360, num=len(tf_list)+1)[:-1], tf_list):
             angle = np.deg2rad(theta)
             x, y = max_radius * np.cos(angle), max_radius * np.sin(angle)
             fig.add_annotation(x=x, y=y, text=tf, showarrow=False, textangle=-theta, xanchor="center", yanchor='middle', font={'size':8})
+        
         fig.add_annotation(x=0, y=0, text=gene, showarrow=False, xanchor="center", yanchor='middle', font={'size':14})
 
         fig.update_layout(
@@ -293,14 +311,19 @@ def run_app(timepoints, base_path):
 
         return fig
 
-
     @callback(
         Output(component_id='tf-correlation', component_property='figure'),
         Input(component_id='tf-picker', component_property='value')
     )
     def update_tf_graph(tf_name):
+        if not tf_name:
+            return go.Figure()
+            
         df_coef = data_loader.get_out_edges_dataframe(tf_name, 'coefficient')
-        values_range_coef = (np.min(df_coef), np.max(df_coef))
+        if df_coef.empty:
+            return go.Figure()
+            
+        values_range_coef = (np.min(df_coef.values), np.max(df_coef.values))
 
         dims = [
             dict(
@@ -317,7 +340,6 @@ def run_app(timepoints, base_path):
                             dimensions = dims
                         )
                     )
-
         return fig
 
     @callback(
@@ -326,28 +348,23 @@ def run_app(timepoints, base_path):
         Input(component_id='tf-correlation', component_property='restyleData'),
         Input(component_id='tf-picker', component_property='value')
     )
-    def update_gene_list(state, _, tf_name):
-        # state = json.loads(state)
+    def update_tf_list(state, restyleData, tf_name):
+        if not tf_name:
+            return "No TF Selected"
+            
         df_corr = data_loader.get_out_edges_dataframe(tf_name, 'correlation')
         df_coef = data_loader.get_out_edges_dataframe(tf_name, 'coefficient')
         merged = df_coef.join(df_corr, rsuffix='_correlation', lsuffix='_coefficient')
         
-        changed_cols = []
-        
-        try:
+        if state and 'data' in state and state['data'] and 'dimensions' in state['data'][0]:
             for i, dim in enumerate(state['data'][0]['dimensions']):
-                try:
+                if 'constraintrange' in dim:
                     mini, maxi = dim['constraintrange']
-                    merged = merged[ (merged[merged.columns[i]] <= maxi) & (merged[merged.columns[i]] >= mini) ]
-                    changed_cols.append(merged.columns[i])
-                except KeyError:
-                    continue
-        except KeyError:
-            try:
-                return f'{tf_name}, {dim}, {changed_cols}, {json.dumps(state)}'
-            except:
-                return f'{tf_name}, {json.dumps(state)}'
-            # return 'Some error!'
+                    # Some versions of plotly return a list of lists if multiple ranges are selected
+                    if isinstance(mini, list):
+                        pass # advanced handling can go here
+                    else:
+                        merged = merged[ (merged[merged.columns[i]] <= maxi) & (merged[merged.columns[i]] >= mini) ]
         
         genes = list(merged.index)
         
@@ -355,17 +372,23 @@ def run_app(timepoints, base_path):
             base_url = 'https://www.genecards.org/cgi-bin/carddisp.pl?gene='
             return [dbc.NavLink(gene, href=base_url+gene, external_link=True) for gene in genes]
 
-        return f'Too many genes to display. Try to reduce your selection.'
+        return f'Selected {len(genes)} genes. Too many genes to display individually. Try to reduce your selection.'
 
     @callback(
         Output(component_id='gene-correlation', component_property='figure'),
         Input(component_id='gene-picker', component_property='value')
     )
     def update_gene_graph(gene_name):
+        if not gene_name:
+            return go.Figure()
+            
         df_corr = data_loader.get_in_edges_dataframe(gene_name, 'correlation')
         df_coef = data_loader.get_in_edges_dataframe(gene_name, 'coefficient')
-        values_range_corr = (np.min(df_corr), np.max(df_corr))
-        values_range_coef = (np.min(df_coef), np.max(df_coef))
+        
+        if df_corr.empty or df_coef.empty:
+            return go.Figure()
+            
+        values_range_corr = (np.min(df_corr.values), np.max(df_corr.values))
 
         dims = [
             dict(
@@ -382,7 +405,6 @@ def run_app(timepoints, base_path):
                             dimensions = dims
                         )
                     )
-
         return fig
 
     @callback(
@@ -391,28 +413,20 @@ def run_app(timepoints, base_path):
         Input(component_id='gene-correlation', component_property='restyleData'),
         Input(component_id='gene-picker', component_property='value')
     )
-    def update_gene_list(state, _, gene_name):
-        # state = json.loads(state)
+    def update_gene_list(state, restyleData, gene_name):
+        if not gene_name:
+            return "No Gene Selected"
+            
         df_corr = data_loader.get_in_edges_dataframe(gene_name, 'correlation')
         df_coef = data_loader.get_in_edges_dataframe(gene_name, 'coefficient')
         merged = df_corr.join(df_coef, rsuffix='_correlation', lsuffix='_coefficient')
         
-        changed_cols = []
-        
-        try:
+        if state and 'data' in state and state['data'] and 'dimensions' in state['data'][0]:
             for i, dim in enumerate(state['data'][0]['dimensions']):
-                try:
+                if 'constraintrange' in dim:
                     mini, maxi = dim['constraintrange']
-                    merged = merged[ (merged[merged.columns[i]] <= maxi) & (merged[merged.columns[i]] >= mini) ]
-                    changed_cols.append(merged.columns[i])
-                except KeyError:
-                    continue
-        except KeyError:
-            try:
-                return f'{gene_name}, {dim}, {changed_cols}, {json.dumps(state)}'
-            except:
-                return f'{gene_name}, {json.dumps(state)}'
-            # return 'Some error!'
+                    if not isinstance(mini, list):
+                        merged = merged[ (merged[merged.columns[i]] <= maxi) & (merged[merged.columns[i]] >= mini) ]
         
         genes = list(merged.index)
         
@@ -420,6 +434,6 @@ def run_app(timepoints, base_path):
             base_url = 'https://www.genecards.org/cgi-bin/carddisp.pl?gene='
             return [dbc.NavLink(gene, href=base_url+gene, external_link=True) for gene in genes]
 
-        return f'Too many genes to display. Try to reduce your selection.'
+        return f'Selected {len(genes)} TFs. Too many TFs to display. Try to reduce your selection.'
     
     app.run(debug=True)
