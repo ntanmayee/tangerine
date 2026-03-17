@@ -121,23 +121,49 @@ class SEACellsMetacellGenerator(MetacellGenerator):
             logger.info(f"Timepoint {time}: Computing {n_metacells} SEACells.")
             
             try:
-                # ---------------------------------------------------------
-                # TODO: Insert your specific SEACells initialization here
-                # Example workflow:
-                # 1. model = SEACells.core.SEACells(subset, build_kernel_on='X_pca', ...)
-                # 2. model.construct_kernel_matrix()
-                # 3. model.initialize_archetypes()
-                # 4. model.fit(min_iter=10, max_iter=50)
-                # 5. Extract aggregated counts based on model.get_hard_assignments()
-                # 6. Create meta_adata, normalize, log1p.
-                # ---------------------------------------------------------
+                build_kernel_on = 'X_pca' 
+                n_waypoint_eigs = 10
+                model = SEACells.core.SEACells(subset, build_kernel_on=build_kernel_on, 
+                                               n_SEACells=n_metacells, n_waypoint_eigs=n_waypoint_eigs, 
+                                               convergence_epsilon = 1e-5)
+                model.construct_kernel_matrix()
+                model.initialize_archetypes()
+                model.fit(min_iter=10, max_iter=50)
+
+                # Extract Aggregated Counts ---
+                # SEACells returns a DataFrame mapping cell index to a 'SEACell' ID
+                assignments = model.get_hard_assignments()
+                subset.obs['metacell_id'] = assignments['SEACell']
+
+                # Extract raw data safely 
+                if subset.raw is not None:
+                    data_mat = subset.raw.X.toarray() if hasattr(subset.raw.X, 'toarray') else subset.raw.X
+                    raw_df = pd.DataFrame(data_mat, index=subset.obs_names, columns=subset.raw.var_names)
+                else:
+                    data_mat = subset.X.toarray() if hasattr(subset.X, 'toarray') else subset.X
+                    if data_mat.max() < 20: 
+                        data_mat = np.expm1(data_mat) # Crude un-log
+                    raw_df = pd.DataFrame(data_mat, index=subset.obs_names, columns=subset.var_names)
                 
-                # Placeholder for successful extraction
-                # meta_adata = ... 
-                # meta_adata.obs[self.time_var] = time
-                # metacell_cache[time] = meta_adata
+                # Group by the SEACell ID and sum the counts
+                aggregated_df = raw_df.groupby(subset.obs['metacell_id']).sum()
+
+                # Create meta_adata, normalize, log1p 
+                meta_adata = sc.AnnData(aggregated_df)
                 
-                logger.warning(f"SEACells integration is pending implementation for {time}.")
+                # Restore the time label
+                meta_adata.obs[self.time_var] = time 
+                
+                # Record how many raw cells make up each SEACell
+                cell_counts = subset.obs['metacell_id'].value_counts()
+                meta_adata.obs['n_cells'] = cell_counts[meta_adata.obs_names].values
+
+                # Standardize the new metacells
+                sc.pp.normalize_total(meta_adata, target_sum=1e4)
+                sc.pp.log1p(meta_adata)
+                
+                # Save to cache
+                metacell_cache[time] = meta_adata
                 
             except Exception as e:
                 logger.error(f"SEACells aggregation failed for {time}: {e}. Fallback to Raw.")
