@@ -9,7 +9,7 @@ class MetacellGenerator(ABC):
     """
     Abstract base class for metacell generation strategies.
     """
-    def __init__(self, adata, time_var, timepoints, min_cells_for_metacell=200, cells_per_metacell=50):
+    def __init__(self, adata, time_var, timepoints, min_cells_for_metacell=200, cells_per_metacell=20):
         self.adata = adata
         self.time_var = time_var
         self.timepoints = timepoints

@@ -155,7 +155,7 @@ class TangerinePipeline:
                     consensus_graph.add_edge(u, v, weight=weight)
                     
         # Compute layout once (using circular_layout, but could use graphviz later maybe)
-        pos = nx.circular_layout(consensus_graph, seed=42)
+        pos = nx.circular_layout(consensus_graph)
         
         # Inject coordinates into individual networks and save
         for time in self.timepoints:
