@@ -132,8 +132,8 @@ class DynamicNetworkInference:
 
     def infer_tf_coregulation(self, all_candidate_tfs, save_path, dropout_threshold=50):
         """
-        Computes TF-TF correlation matrices, orders them based on t0, 
-        and clusters them dynamically across all timepoints.
+        Computes TF-TF correlation matrices, orders them independently per timepoint, 
+        and clusters them dynamically to track module evolution.
         """
         import os
         os.makedirs(save_path, exist_ok=True)
@@ -168,7 +168,7 @@ class DynamicNetworkInference:
             logger.error("Not enough TFs passed the dropout filter to perform clustering.")
             return
 
-        # Compute Correlation
+        # 1. Compute Correlation
         logger.info('Computing correlation among TFs...')
         corr_dfs = {}
         for time in self.timepoints:
@@ -177,30 +177,33 @@ class DynamicNetworkInference:
             
             # Extract data and compute correlation
             data_df = sc.get.obs_df(current_adata, valid_cols, use_raw=False)
-            corr_dfs[time] = data_df.corr('spearman').fillna(0)
+            corr = data_df.corr('spearman')
+            
+            # Ensure consistent index/columns across all timepoints before clustering
+            # (Fills missing TFs that dropped out in this specific timepoint with 0.0)
+            corr = corr.reindex(index=filt_tfs, columns=filt_tfs).fillna(0.0)
+            corr_dfs[time] = corr
 
-        # Determine Baseline Visual Ordering (based on t0)
-        logger.info('Determining optimal heatmap ordering based on initial timepoint...')
-        t0 = self.timepoints[0]
-        X_t0 = corr_dfs[t0].values
-        
-        Z_t0 = linkage(X_t0, method='ward')
-        optimal_order_indices = leaves_list(Z_t0)
-        ordered_tfs = corr_dfs[t0].index[optimal_order_indices]
-
-        # Reorder, Save, and Cluster ALL timepoints
-        logger.info('Saving ordered correlation matrices and computing dynamic clusters...')
-        cluster_df = pd.DataFrame(index=ordered_tfs, columns=self.timepoints)
+        # 2. Independently Order, Save, and Cluster ALL timepoints
+        logger.info('Clustering and ordering correlation matrices independently per timepoint...')
+        cluster_df = pd.DataFrame(index=filt_tfs, columns=self.timepoints)
 
         for time in self.timepoints:
-            # Reorder rows and columns to match t0 visual baseline
-            corr_dfs[time] = corr_dfs[time].loc[ordered_tfs, ordered_tfs]
-            corr_dfs[time].to_csv(join(save_path, f'tf_tf_{time}.csv'))
-
-            # Compute clustering for THIS specific timepoint
-            X = corr_dfs[time].values
+            current_corr = corr_dfs[time]
+            X = current_corr.values
+            
+            # Compute linkage for the CURRENT timepoint
             Z = linkage(X, method='ward')
+            
+            # Determine optimal visual ordering for the CURRENT timepoint
+            optimal_order_indices = leaves_list(Z)
+            ordered_tfs = current_corr.index[optimal_order_indices]
+            
+            # Reorder the correlation matrix and save
+            ordered_corr = current_corr.loc[ordered_tfs, ordered_tfs]
+            ordered_corr.to_csv(join(save_path, f'tf_tf_{time}.csv'))
 
+            # Compute dynamic clusters for the CURRENT timepoint
             distances = Z[:, 2]
             diffs = np.diff(distances)
 
@@ -210,11 +213,13 @@ class DynamicNetworkInference:
             else:
                 num_clusters = 2
             
+            # cluster_labels maps 1-to-1 with the original unordered current_corr.index
             cluster_labels = fcluster(Z, t=num_clusters, criterion='maxclust')
-            cluster_df.loc[corr_dfs[time].index, time] = cluster_labels
+            cluster_df.loc[current_corr.index, time] = cluster_labels
 
+        # 3. Format and Save Cluster Assignments
         for time in self.timepoints:
             cluster_df[time] = cluster_df[time].apply(lambda x: f'{time}-{int(x) if pd.notnull(x) else 0}')
 
         cluster_df.to_csv(join(save_path, 'louvain_tf.csv'))
-        logger.info('Saved ordered matrices and dynamic clustering results to file.')
+        logger.info('Saved independently ordered matrices and dynamic clustering results to file.')
