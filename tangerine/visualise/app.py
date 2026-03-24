@@ -14,6 +14,9 @@ def make_app_layout(app, tf_list, gene_list, timepoints):
     tf_chosen = tf_list[0] if tf_list else None
     gene_chosen = gene_list[0] if gene_list else None
 
+    tf_list.sort()
+    gene_list.sort()
+
     app.layout = dbc.Container([
         # --- HEADER ---
         dbc.Card([
@@ -35,7 +38,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints):
                         # Top Left: Pre-clustered Correlation Heatmap
                         dbc.Row([
                             dbc.Col([
-                                html.H5("TF Correlation (Pre-clustered)", className="mt-3"),
+                                html.H5("TF Correlation", className="mt-3"),
                                 html.P("Select a timepoint. Box-select a region to track TFs.", className="text-muted small"),
                                 
                                 dcc.Slider(
@@ -50,7 +53,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints):
                         # Middle Left: Alluvial
                         dbc.Row([
                             dbc.Col([
-                                html.H5("Module Evolution (Alluvial)", className="mt-3"),
+                                html.H5("Module Evolution", className="mt-3"),
                                 html.P("Tracks cluster membership of TFs selected above.", className="text-muted small"),
                                 dcc.Graph(id='alluvial-plot', style={'height': '280px'})
                             ])
@@ -63,7 +66,13 @@ def make_app_layout(app, tf_list, gene_list, timepoints):
                                     dbc.CardHeader(
                                         dbc.Row([
                                             dbc.Col(html.Strong(id='selected-tf-count', children="0 TFs Selected")),
-                                            dbc.Col(dbc.Button("📋 Copy for GO Enrichment", id="copy-btn", size="sm", outline=True, color="primary"), width="auto")
+                                            dbc.Col([
+                                                html.Span("Copy", className="text-muted small me-2"),
+                                                dcc.Clipboard(
+                                                    id="copy-clipboard", 
+                                                    style={"display": "inline-block", "fontSize": "20px", "color": "#E67E22", "cursor": "pointer"}
+                                                )
+                                            ], width="auto", className="d-flex align-items-center")
                                         ], justify="between")
                                     ),
                                     dbc.CardBody(id='gene-chip-container', style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '8px', 'minHeight': '60px'})
@@ -87,17 +96,17 @@ def make_app_layout(app, tf_list, gene_list, timepoints):
                         
                         html.Label("Δ Correlation Threshold (Filter Noise):", className="fw-bold small"),
                         dcc.Slider(
-                            0.1, 1.0, step=0.05, value=0.3, id='delta-threshold', className="mb-2"
+                            0.1, 1.0, step=0.05, value=0.75, id='delta-threshold', className="mb-2"
                         ),
                         
                         # Circular Graph
-                        dcc.Graph(id='differential-circular-graph', style={'height': '400px'}),
+                        dcc.Graph(id='differential-circular-graph', style={'height': '500px'}),
                         
                         # Metacell Scatterplots (Side-by-side)
                         html.H6("Raw Metacell Expression (Click an edge above)", className="mt-2 text-center"),
                         dbc.Row([
-                            dbc.Col(dcc.Graph(id='scatter-t1', style={'height': '220px'}), width=6, className="px-1"),
-                            dbc.Col(dcc.Graph(id='scatter-t2', style={'height': '220px'}), width=6, className="px-1")
+                            dbc.Col(dcc.Graph(id='scatter-t1', style={'height': '250px'}), width=6, className="px-1"),
+                            dbc.Col(dcc.Graph(id='scatter-t2', style={'height': '250px'}), width=6, className="px-1")
                         ])
                     ], width=5, className="ps-4")
                 ], className="mb-5")
@@ -110,13 +119,13 @@ def make_app_layout(app, tf_list, gene_list, timepoints):
                 # Section A: 1D Temporal Heatmap
                 dbc.Row([
                     dbc.Col([
-                        html.H4("TF Ego-Network Dynamics", className="mt-4"),
+                        html.H4("TF Co-regulation Dynamics", className="mt-4"),
                         html.P("How does a specific TF's relationship with its top partners evolve?", className="text-muted"),
                         dbc.InputGroup([
                             dbc.InputGroupText("Target TF:"),
                             dbc.Select(options=[{'label': tf, 'value': tf} for tf in tf_list], value=tf_chosen, id='ego-tf-dropdown')
                         ], className="mb-3", style={"width": "300px"}),
-                        dcc.Graph(id='ego-heatmap', style={'height': '350px'})
+                        dcc.Graph(id='ego-heatmap', style={'height': '500px'})
                     ], width=12)
                 ]),
                 
@@ -131,7 +140,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints):
                             dbc.InputGroupText("Target Gene:"),
                             dbc.Select(options=[{'label': g, 'value': g} for g in gene_list], value=gene_chosen, id='gene-picker')
                         ], className="mb-3", style={"width": "300px"}),
-                        dcc.Graph(id='split-streamgraph', style={'height': '400px'})
+                        dcc.Graph(id='split-streamgraph', style={'height': '700px'})
                     ], width=12)
                 ], className="mb-5")
             ])
@@ -200,6 +209,7 @@ def run_app(timepoints, base_path):
         Output('alluvial-plot', 'figure'),
         Output('gene-chip-container', 'children'),
         Output('selected-tf-count', 'children'),
+        Output('copy-clipboard', 'content'),
         Input('correlation-heatmap', 'selectedData'),
         State('correlation-heatmap', 'figure')
     )
@@ -242,14 +252,23 @@ def run_app(timepoints, base_path):
             line={'colorscale': colorscale_parcat, 'cmin': 0, 'cmax': 1, 'color': color_array, 'shape': 'hspline'},
             hoverinfo='none'
         ))
-        fig.update_layout(margin=dict(l=20, r=20, t=20, b=20))
+        fig.update_layout(margin=dict(l=20, r=40, t=20, b=20))
 
         if not selected_tfs:
             chips = [html.Span("Draw a box on the heatmap to select TFs.", className="text-muted")]
         else:
             chips = [dbc.Badge(tf, color="secondary", className="me-1 fs-6") for tf in selected_tfs]
 
-        return fig, chips, f"{len(selected_tfs)} TFs Selected"
+        # Generate Gene Chips
+        if not selected_tfs:
+            chips = [html.Span("Draw a box on the heatmap to select TFs.", className="text-muted")]
+            tf_string = "" # Empty clipboard
+        else:
+            chips = [dbc.Badge(tf, color="secondary", className="me-1 fs-6") for tf in selected_tfs]
+            # Join the selected TFs with a newline character so they paste cleanly into GO tools
+            tf_string = "\n".join(selected_tfs) 
+
+        return fig, chips, f"{len(selected_tfs)} TFs Selected", tf_string
 
 
     @app.callback(
@@ -360,6 +379,12 @@ def run_app(timepoints, base_path):
         def create_scatter(time, tf_x, tf_y):
             # Fetch exactly two columns from disk instantly
             df_exp = data_loader.get_metacell_expression(time, [tf_x, tf_y])
+
+            # Fetch the exact Spearman correlation
+            try:
+                corr_val = data_loader.tf_correlation_dfs[time].loc[tf_x, tf_y]
+            except KeyError:
+                corr_val = 0.0 # Safety fallback
             
             # Safety check: if file is missing or TFs aren't in columns, return empty arrays
             if df_exp.empty or tf_x not in df_exp.columns or tf_y not in df_exp.columns:
@@ -370,10 +395,10 @@ def run_app(timepoints, base_path):
 
             fig = go.Figure(go.Scatter(
                 x=exp_x, y=exp_y, mode='markers',
-                marker=dict(size=4, color='#E67E22', opacity=0.7) # Tangerine color
+                marker=dict(size=5, color='#E67E22', opacity=1, line=dict(width=0.5, color='white'))
             ))
             fig.update_layout(
-                title=dict(text=f"{time}", font=dict(size=12)),
+                title=dict(text=f"<b>{time}</b> (Spearman ρ = {corr_val:.2f})", font=dict(size=12), x=0.5, xanchor='center'),
                 xaxis_title=dict(text=tf_x, font=dict(size=10)),
                 yaxis_title=dict(text=tf_y, font=dict(size=10)),
                 margin=dict(l=30, r=10, t=30, b=30),
@@ -450,6 +475,10 @@ def run_app(timepoints, base_path):
                     exaggerated_size = (normalized_val ** 0.75) * 55
                     size_vals.append(max(exaggerated_size, 8)) 
 
+        if x_vals: 
+            sorted_data = sorted(zip(x_vals, y_vals, coef_vals, size_vals), key=lambda item: item[3], reverse=True)
+            x_vals, y_vals, coef_vals, size_vals = map(list, zip(*sorted_data))
+        
         fig = go.Figure(go.Scatter(
             x=x_vals,
             y=y_vals,
