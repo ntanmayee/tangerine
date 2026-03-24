@@ -1,439 +1,482 @@
 import numpy as np
-import json
-from dash import Dash, html, dcc, callback, Output, Input, State, dash_table
+from dash import Dash, html, dcc, callback, Output, Input, State
 import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
 from tangerine.visualise.data_loader import DataLoader
-from matplotlib import colors
 import matplotlib as mpl
-import itertools as it
-from scipy.cluster.hierarchy import linkage, leaves_list  # NEW: imported for on-the-fly visual ordering
+import networkx as nx
+import pandas as pd
+import itertools
 
-def make_app_layout(app, tf_list_picker, gene_list, timepoints):
-    # App layout
-    styles = {
-        'pre': {
-            'border': 'thin lightgrey solid',
-            'overflowX': 'scroll'
-        }
-    }
-
+def make_app_layout(app, tf_list, gene_list, timepoints):
     t0 = timepoints[0]
-    tf_chosen = tf_list_picker[0] if tf_list_picker else None
+    t1 = timepoints[1] if len(timepoints) > 1 else timepoints[0]
+    tf_chosen = tf_list[0] if tf_list else None
     gene_chosen = gene_list[0] if gene_list else None
 
     app.layout = dbc.Container([
-        dbc.Row([
-            html.H1('Tangerine: Visualising Dynamic Gene Regulation'),
-            html.P('This is an interactive visualisation of multi-omic time course data.'),
-        ]),
+        # --- HEADER ---
+        dbc.Card([
+            dbc.CardBody([
+                html.H2("🍊 Tangerine: Dynamic Gene Regulatory Network Explorer", className="text-primary"),
+                html.P("Explore time-varying TF co-regulation and regulatory network topology.", className="mb-0")
+            ])
+        ], className="mb-4 mt-3 shadow-sm"),
 
-        dcc.Tabs([
-            dcc.Tab(label='TF Co-regulation', children=[
+        # --- TABS ---
+        dbc.Tabs([
+            # ==========================================================
+            # TAB 1: GLOBAL TOPOLOGY & MODULES
+            # ==========================================================
+            dbc.Tab(label="Global Topology & Modules", tab_id="tab-1", children=[
                 dbc.Row([
-                    html.H3('Transcription Factor Co-regulation'),
-                ]),
-                dbc.Row([
+                    # LEFT COLUMN: Heatmap, Alluvial & Gene Chips (Width 7)
                     dbc.Col([
-                        html.H5('Heatmap', style={"margin-top": "20px"}),
-                        html.P('Spearman correlation with all other TFs. Select a timepoint from the dropdown menu.'),
-                        dcc.Dropdown(timepoints, t0, id='time-picker'),
-                        
-                        html.Div([
-                            dbc.RadioItems(
-                                id='heatmap-order',
-                                options=[
-                                    {'label': f'Order by Initial Timepoint ({t0})', 'value': 't0'},
-                                    {'label': 'Order by Current Timepoint', 'value': 'current'}
-                                ],
-                                value='t0',
-                                inline=True,
-                                style={'margin-top': '15px', 'margin-bottom': '5px', 'font-size': '14px'}
-                            )
+                        # Top Left: Pre-clustered Correlation Heatmap
+                        dbc.Row([
+                            dbc.Col([
+                                html.H5("TF Correlation (Pre-clustered)", className="mt-3"),
+                                html.P("Select a timepoint. Box-select a region to track TFs.", className="text-muted small"),
+                                
+                                dcc.Slider(
+                                    0, len(timepoints)-1, step=1, 
+                                    marks={i: t for i, t in enumerate(timepoints)}, 
+                                    value=0, id='heatmap-time-slider', className="mb-2"
+                                ),
+                                dcc.Graph(id='correlation-heatmap', style={'height': '350px'})
+                            ])
                         ]),
                         
-                        dcc.Graph(figure={}, id='tf-heatmap'),
-                        dcc.Store(id='tick-values')
-                    ]),
+                        # Middle Left: Alluvial
+                        dbc.Row([
+                            dbc.Col([
+                                html.H5("Module Evolution (Alluvial)", className="mt-3"),
+                                html.P("Tracks cluster membership of TFs selected above.", className="text-muted small"),
+                                dcc.Graph(id='alluvial-plot', style={'height': '280px'})
+                            ])
+                        ]),
+                        
+                        # Bottom Left: Gene Chip Bank
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardHeader(
+                                        dbc.Row([
+                                            dbc.Col(html.Strong(id='selected-tf-count', children="0 TFs Selected")),
+                                            dbc.Col(dbc.Button("📋 Copy for GO Enrichment", id="copy-btn", size="sm", outline=True, color="primary"), width="auto")
+                                        ], justify="between")
+                                    ),
+                                    dbc.CardBody(id='gene-chip-container', style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '8px', 'minHeight': '60px'})
+                                ], className="shadow-sm")
+                            ])
+                        ], className="mt-3")
+                        
+                    ], width=7, className="border-end pe-4"),
+
+                    # RIGHT COLUMN: Differential Circular Graph & Scatterplots (Width 5)
                     dbc.Col([
-                        html.H5('Radial Ego Network', style={"margin-top": "20px"}),
-                        html.P('Inspect correlation of one TF with the rest. Select a TF from the dropdown menu.'),
-                        dcc.Dropdown(tf_list_picker, tf_chosen, id='tf-picker-radial'),
-                        dcc.Graph(figure={}, id='tf-tf', config={'displayModeBar': False, 'scrollZoom': False})
-                    ]),
-                ]),
-                dbc.Row([
-                    html.H5('Alluvial plot'),
-                    html.P('Select a region from the heatmap to check how cluster membership changes over time.'),
-                    dcc.Graph(figure={}, id='parcat'),
-                    dbc.Table(id='output')
-                ])
+                        html.H5("Differential Network Topology", className="mt-3"),
+                        html.P("Compare two timepoints. Edges show change in Spearman correlation.", className="text-muted small"),
+                        
+                        dbc.InputGroup([
+                            dbc.InputGroupText("Compare:"),
+                            dbc.Select(options=[{'label': t, 'value': t} for t in timepoints], value=t0, id='diff-time-1'),
+                            dbc.InputGroupText("vs"),
+                            dbc.Select(options=[{'label': t, 'value': t} for t in timepoints], value=t1, id='diff-time-2'),
+                        ], className="mb-3", size="sm"),
+                        
+                        html.Label("Δ Correlation Threshold (Filter Noise):", className="fw-bold small"),
+                        dcc.Slider(
+                            0.1, 1.0, step=0.05, value=0.3, id='delta-threshold', className="mb-2"
+                        ),
+                        
+                        # Circular Graph
+                        dcc.Graph(id='differential-circular-graph', style={'height': '400px'}),
+                        
+                        # Metacell Scatterplots (Side-by-side)
+                        html.H6("Raw Metacell Expression (Click an edge above)", className="mt-2 text-center"),
+                        dbc.Row([
+                            dbc.Col(dcc.Graph(id='scatter-t1', style={'height': '220px'}), width=6, className="px-1"),
+                            dbc.Col(dcc.Graph(id='scatter-t2', style={'height': '220px'}), width=6, className="px-1")
+                        ])
+                    ], width=5, className="ps-4")
+                ], className="mb-5")
             ]),
-            dcc.Tab(label='TF-Gene', children=[
+
+            # ==========================================================
+            # TAB 2: TARGETED DYNAMICS
+            # ==========================================================
+            dbc.Tab(label="Targeted Dynamics", tab_id="tab-2", children=[
+                # Section A: 1D Temporal Heatmap
                 dbc.Row([
-                    html.H5('TF view'),
-                    html.P('Select a TF from the dropdown menu.'),
-                    dcc.Dropdown(tf_list_picker, tf_chosen, id='tf-picker'),
-                    dcc.Graph(figure={}, id='tf-correlation'),
-                    html.Pre(id='selected-genes', style=styles['pre'])
+                    dbc.Col([
+                        html.H4("TF Ego-Network Dynamics", className="mt-4"),
+                        html.P("How does a specific TF's relationship with its top partners evolve?", className="text-muted"),
+                        dbc.InputGroup([
+                            dbc.InputGroupText("Target TF:"),
+                            dbc.Select(options=[{'label': tf, 'value': tf} for tf in tf_list], value=tf_chosen, id='ego-tf-dropdown')
+                        ], className="mb-3", style={"width": "300px"}),
+                        dcc.Graph(id='ego-heatmap', style={'height': '350px'})
+                    ], width=12)
                 ]),
+                
+                html.Hr(className="my-4"),
+
+                # Section B: Split Streamgraph
                 dbc.Row([
-                    html.H5('Gene view'),
-                    html.P('Select a gene from the dropdown menu.'),
-                    dcc.Dropdown(gene_list, gene_chosen, id='gene-picker'),
-                    dcc.Graph(figure={}, id='gene-correlation'),
-                    html.Pre(id='selected-tfs', style=styles['pre'])
-                ]),
-            ]),     
-        ]),
-    ])
+                    dbc.Col([
+                        html.H4("Target Gene Regulation"),
+                        html.P("Total upstream influence on a target gene over time (Ridge Regression).", className="text-muted"),
+                        dbc.InputGroup([
+                            dbc.InputGroupText("Target Gene:"),
+                            dbc.Select(options=[{'label': g, 'value': g} for g in gene_list], value=gene_chosen, id='gene-picker')
+                        ], className="mb-3", style={"width": "300px"}),
+                        dcc.Graph(id='split-streamgraph', style={'height': '400px'})
+                    ], width=12)
+                ], className="mb-5")
+            ])
+            
+        ], id="tabs", active_tab="tab-1", className="mt-3")
+    ], fluid=True, className="px-5")
+
 
 def run_app(timepoints, base_path):
     data_loader = DataLoader(timepoints, base_path)
 
-    # define colourmap and divnorm
-    vmin, vcenter, vmax = -0.2, 0.0, 0.3
-    divnorm = colors.TwoSlopeNorm(vmin=vmin, vcenter=vcenter, vmax=vmax)
-    cmap = mpl.cm.RdBu
-    cmap_ = mpl.cm.get_cmap('RdBu_r', 256)
-    normed_vals = np.linspace(vmin, vmax, 256)
-    rgba_colors = [cmap_(divnorm(v)) for v in normed_vals]
-    colorscale = [
-        [i / 255, f'rgba({int(r*255)},{int(g*255)},{int(b*255)},{a:.3f})']
-        for i, (r, g, b, a) in enumerate(rgba_colors)
-    ]
-
-    # parcat init
-    color_parcat = np.zeros(len(data_loader.tf_louvain), dtype='uint8')
-    colorscale_parcat = [[0, 'gray'], [1, 'firebrick']]
+    # Calculate global max coefficient for consistent dot plot colors 
+    global_max_coef = 0.0
+    for time in timepoints:
+        for u, v, data in data_loader.networks[time].edges(data=True):
+            val = abs(data.get('coefficient', 0))
+            if val > global_max_coef:
+                global_max_coef = val
+                
+    if global_max_coef == 0: global_max_coef = 1.0 # Fallback safety
 
     t0 = timepoints[0]
-    tf_list_picker = []
-    for node in data_loader.networks[t0]:
-        if len(data_loader.networks[t0].out_edges(node)) > 0:
-            tf_list_picker.append(node)
-                
+    tf_list = data_loader.tf_list
     gene_list = []
     for node in data_loader.networks[t0]:
         if len(data_loader.networks[t0].in_edges(node)) > 0:
             gene_list.append(node)
 
-    # Initialize the app
+    # --- Precompute Circular Layout for Consensus Graph ---
+    G_base = data_loader.networks[t0]
+    tf_subgraph = G_base.subgraph([n for n in G_base.nodes if n in tf_list])
+    circular_pos = nx.circular_layout(tf_subgraph)
+
     app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
-    make_app_layout(app, tf_list_picker, gene_list, timepoints)
+    make_app_layout(app, tf_list, gene_list, timepoints)
+
+    # =========================================================================
+    # CALLBACKS: TAB 1
+    # =========================================================================
+    
+    @app.callback(
+        Output('correlation-heatmap', 'figure'),
+        Input('heatmap-time-slider', 'value')
+    )
+    def update_heatmap(time_idx):
+        time = timepoints[time_idx]
+        df = data_loader.tf_correlation_dfs[time]
+
+        fig = go.Figure(go.Heatmap(
+            z=df.values, x=df.columns, y=df.index,
+            colorscale='RdBu_r', zmid=0, zmin=-1, zmax=1,
+            colorbar=dict(title="Spearman"),
+            hovertemplate="TF X: %{x}<br>TF Y: %{y}<br>Corr: %{z:.2f}<extra></extra>"
+        ))
+        
+        # yaxis_autorange='reversed' fixes the diagonal orientation 
+        fig.update_layout(
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis_showticklabels=False, yaxis_showticklabels=False,
+            yaxis_autorange='reversed', 
+            dragmode='select', plot_bgcolor='white'
+        )
+        return fig
 
     @app.callback(
-            Output('parcat', 'figure'),
-            Input('tf-heatmap', 'selectedData'),
-            Input('tick-values', 'data')
+        Output('alluvial-plot', 'figure'),
+        Output('gene-chip-container', 'children'),
+        Output('selected-tf-count', 'children'),
+        Input('correlation-heatmap', 'selectedData'),
+        State('correlation-heatmap', 'figure')
     )
-    def update_parcat(selectedData, tick_names):
+    def update_alluvial_and_chips(selectedData, heatmap_fig):
         dimensions = data_loader.get_parcat_dimensions()
-        if not selectedData or 'range' not in selectedData:
-            fig = go.Figure(
-                    go.Parcats(
-                        dimensions=dimensions,
-                        line={'colorscale': colorscale_parcat, 'cmin': 0, 'cmax': 1, 'color': color_parcat, 'shape': 'hspline'}
-                    )
+        colorscale_parcat = [[0, 'lightgray'], [1, '#E67E22']] 
+        color_array = np.zeros(len(data_loader.tf_louvain), dtype='uint8')
+
+        selected_tfs = []
+        
+        if selectedData and heatmap_fig and 'data' in heatmap_fig:
+            axis_labels = heatmap_fig['data'][0]['x'] 
+            
+            if 'points' in selectedData and len(selectedData['points']) > 0 and 'x' in selectedData['points'][0] and isinstance(selectedData['points'][0]['x'], str):
+                selected_tfs = list(set([p['x'] for p in selectedData['points']] + [p['y'] for p in selectedData['points']]))
+                
+            elif 'range' in selectedData:
+                x_range = selectedData['range']['x']
+                y_range = selectedData['range']['y']
+                
+                def get_selected_labels(labels, sel_range):
+                    res = []
+                    # Added safety min/max to handle reversed Y-axis selection ranges
+                    min_val, max_val = min(sel_range), max(sel_range)
+                    for i, label in enumerate(labels):
+                        if (i + 0.5) >= min_val and (i - 0.5) <= max_val:
+                            res.append(label)
+                    return res
+                    
+                sel_x = get_selected_labels(axis_labels, x_range)
+                sel_y = get_selected_labels(axis_labels, y_range)
+                selected_tfs = list(set(sel_x + sel_y))
+
+        if selected_tfs:
+            new_indices = [data_loader.tf_louvain.index.get_loc(tf) for tf in selected_tfs if tf in data_loader.tf_louvain.index]
+            color_array[new_indices] = 1
+
+        fig = go.Figure(go.Parcats(
+            dimensions=dimensions,
+            line={'colorscale': colorscale_parcat, 'cmin': 0, 'cmax': 1, 'color': color_array, 'shape': 'hspline'},
+            hoverinfo='none'
+        ))
+        fig.update_layout(margin=dict(l=20, r=20, t=20, b=20))
+
+        if not selected_tfs:
+            chips = [html.Span("Draw a box on the heatmap to select TFs.", className="text-muted")]
+        else:
+            chips = [dbc.Badge(tf, color="secondary", className="me-1 fs-6") for tf in selected_tfs]
+
+        return fig, chips, f"{len(selected_tfs)} TFs Selected"
+
+
+    @app.callback(
+        Output('differential-circular-graph', 'figure'),
+        Input('diff-time-1', 'value'),
+        Input('diff-time-2', 'value'),
+        Input('delta-threshold', 'value')
+    )
+    def update_diff_graph(t1, t2, threshold):
+        if not t1 or not t2: return go.Figure()
+        
+        df1 = data_loader.tf_correlation_dfs[t1]
+        df2 = data_loader.tf_correlation_dfs[t2]
+        delta_df = df2 - df1 
+        delta_df = delta_df.fillna(0)
+        
+        pos_edge_x, pos_edge_y = [], []
+        neg_edge_x, neg_edge_y = [], []
+        
+        hover_x, hover_y, hover_text, hover_customdata = [], [], [], []
+        active_nodes = set() # Keep track of nodes that pass the filter
+        
+        nodes = list(circular_pos.keys())
+        
+        for u, v in itertools.combinations(nodes, 2):
+            if u in delta_df.index and v in delta_df.columns:
+                delta = delta_df.loc[u, v]
+                
+                if abs(delta) >= threshold:
+                    active_nodes.update([u, v]) # Mark these nodes to be drawn
+                    
+                    x0, y0 = circular_pos[u]
+                    x1, y1 = circular_pos[v]
+                    
+                    if delta > 0:
+                        pos_edge_x.extend([x0, x1, None])
+                        pos_edge_y.extend([y0, y1, None])
+                    else:
+                        neg_edge_x.extend([x0, x1, None])
+                        neg_edge_y.extend([y0, y1, None])
+                    
+                    hover_x.append((x0 + x1) / 2)
+                    hover_y.append((y0 + y1) / 2)
+                    hover_text.append(f"<b>{u} ↔ {v}</b><br>Δ Corr: {delta:.3f}<br><i>Click for expression</i>")
+                    hover_customdata.append([u, v]) # Store the TF names for the click event
+
+        pos_edge_trace = go.Scatter(
+            x=pos_edge_x, y=pos_edge_y, mode='lines',
+            line=dict(width=1.5, color="rgba(231, 76, 60, 0.7)"), hoverinfo='none'
+        )
+
+        neg_edge_trace = go.Scatter(
+            x=neg_edge_x, y=neg_edge_y, mode='lines',
+            line=dict(width=1.5, color="rgba(52, 152, 219, 0.7)"), hoverinfo='none'
+        )
+        
+        edge_hover_trace = go.Scatter(
+            x=hover_x, y=hover_y, mode='markers',
+            marker=dict(size=12, color='rgba(0,0,0,0)'),
+            text=hover_text,
+            customdata=hover_customdata, # Pass data to click event
+            hovertemplate="%{text}<extra></extra>"
+        )
+
+        # Only draw nodes that are in active_nodes!
+        node_x = [circular_pos[n][0] for n in active_nodes]
+        node_y = [circular_pos[n][1] for n in active_nodes]
+        
+        node_trace = go.Scatter(
+            x=node_x, y=node_y, mode='markers+text',
+            marker=dict(size=6, color='#2C3E50', line=dict(width=1, color='white')),
+            text=list(active_nodes), 
+            textposition="top center",
+            textfont=dict(size=9),
+            hoverinfo='none'
+        )
+
+        fig = go.Figure(data=[pos_edge_trace, neg_edge_trace, edge_hover_trace, node_trace])
+        fig.update_layout(
+            showlegend=False, hovermode='closest',
+            margin=dict(b=20, l=20, r=20, t=20),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            plot_bgcolor='white'
+        )
+        return fig
+    
+    @app.callback(
+        Output('scatter-t1', 'figure'),
+        Output('scatter-t2', 'figure'),
+        Input('differential-circular-graph', 'clickData'),
+        State('diff-time-1', 'value'),
+        State('diff-time-2', 'value')
+    )
+    def update_scatterplots(clickData, t1, t2):
+        # Empty state before user clicks an edge
+        empty_fig = go.Figure().update_layout(
+            xaxis=dict(visible=False), yaxis=dict(visible=False),
+            annotations=[dict(text="Click an edge to view<br>metacell expression.", xref="paper", yref="paper", showarrow=False, font=dict(color="gray"))],
+            plot_bgcolor='white', margin=dict(l=0, r=0, t=30, b=0)
+        )
+        if not clickData or not t1 or not t2:
+            return empty_fig, empty_fig
+
+        # Extract which TFs were clicked from the customdata we set earlier
+        tf_u, tf_v = clickData['points'][0]['customdata']
+
+        def create_scatter(time, tf_x, tf_y):
+            # Fetch exactly two columns from disk instantly
+            df_exp = data_loader.get_metacell_expression(time, [tf_x, tf_y])
+            
+            # Safety check: if file is missing or TFs aren't in columns, return empty arrays
+            if df_exp.empty or tf_x not in df_exp.columns or tf_y not in df_exp.columns:
+                exp_x, exp_y = [], []
+            else:
+                exp_x = df_exp[tf_x].values
+                exp_y = df_exp[tf_y].values
+
+            fig = go.Figure(go.Scatter(
+                x=exp_x, y=exp_y, mode='markers',
+                marker=dict(size=4, color='#E67E22', opacity=0.7) # Tangerine color
+            ))
+            fig.update_layout(
+                title=dict(text=f"{time}", font=dict(size=12)),
+                xaxis_title=dict(text=tf_x, font=dict(size=10)),
+                yaxis_title=dict(text=tf_y, font=dict(size=10)),
+                margin=dict(l=30, r=10, t=30, b=30),
+                plot_bgcolor='rgba(240,240,240,0.5)' # Slight grey background to pop the dots
             )
             return fig
 
-        x_range = selectedData['range']['x']
-        y_range = selectedData['range']['y']
+        fig_t1 = create_scatter(t1, tf_u, tf_v)
+        fig_t2 = create_scatter(t2, tf_u, tf_v)
 
-        def get_selected_labels(axis_labels, selected_range):
-            selected_labels = []
-            for i, label in enumerate(axis_labels):
-                center = i  
-                left = center - 0.5
-                right = center + 0.5
-                if right >= selected_range[0] and left <= selected_range[1]:
-                    selected_labels.append(label)
-            return selected_labels
+        return fig_t1, fig_t2
 
-        selected_x_labels = get_selected_labels(tick_names, x_range)
-        selected_y_labels = get_selected_labels(tick_names, y_range)
 
-        selected_coords = sorted(list(set(list(selected_x_labels + selected_y_labels))))
+    # =========================================================================
+    # CALLBACKS: TAB 2
+    # =========================================================================
 
-        new_color = np.zeros(len(data_loader.tf_louvain), dtype='uint8')
-        new_indices = [data_loader.tf_louvain.index.get_loc(tf) for tf in selected_coords if tf in data_loader.tf_louvain.index]
-        new_color[new_indices] = 1
+    @app.callback(
+        Output('ego-heatmap', 'figure'),
+        Input('ego-tf-dropdown', 'value')
+    )
+    def update_1d_heatmap(tf_name):
+        if not tf_name: return go.Figure()
+        
+        ego_data = {t: data_loader.tf_correlation_dfs[t].loc[tf_name] for t in timepoints}
+        ego_df = pd.DataFrame(ego_data)
+        
+        if tf_name in ego_df.index: ego_df = ego_df.drop(index=tf_name)
+        top_tfs = ego_df.abs().max(axis=1).nlargest(15).index
+        ego_top_df = ego_df.loc[top_tfs]
 
-        fig = go.Figure(
-            go.Parcats(
-                        dimensions=dimensions,
-                        line={'colorscale': colorscale_parcat, 'cmin': 0, 'cmax': 1, 'color': new_color, 'shape': 'hspline'}
-                    )
+        fig = go.Figure(go.Heatmap(
+            z=ego_top_df.values, x=ego_top_df.columns, y=ego_top_df.index,
+            colorscale='RdBu_r', zmid=0, zmin=-1, zmax=1,
+            text=np.round(ego_top_df.values, 2), texttemplate="%{text}", textfont={"size":10},
+            colorbar=dict(title="Spearman")
+        ))
+        
+        # Apply the same Y-axis reversal here so the labels align logically
+        fig.update_layout(
+            margin=dict(l=100, r=20, t=20, b=40), 
+            yaxis_autorange='reversed',
+            plot_bgcolor='white'
         )
         return fig
 
     @app.callback(
-        Output('output', 'children'),
-        Input('tf-heatmap', 'selectedData'),
-        Input('tick-values', 'data')
+        Output('split-streamgraph', 'figure'), 
+        Input('gene-picker', 'value')
     )
-    def handle_selection(selectedData, tick_names):
-        if not selectedData or 'range' not in selectedData:
-            return "Use box-select to choose heatmap cells."
+    def update_temporal_dot_plot(gene_name):
+        if not gene_name: return go.Figure()
 
-        x_range = selectedData['range']['x']
-        y_range = selectedData['range']['y']
-
-        def get_selected_labels(axis_labels, selected_range):
-            selected_labels = []
-            for i, label in enumerate(axis_labels):
-                center = i  
-                left = center - 0.5
-                right = center + 0.5
-                if right >= selected_range[0] and left <= selected_range[1]:
-                    selected_labels.append(label)
-            return selected_labels
-
-        selected_x_labels = get_selected_labels(tick_names, x_range)
-        selected_y_labels = get_selected_labels(tick_names, y_range)
-
-        selected_coords = sorted(list(set(list(selected_x_labels + selected_y_labels))))
+        df_coef = data_loader.get_in_edges_dataframe(gene_name, 'coefficient')
+        if df_coef.empty: return go.Figure()
         
-        # Filter strictly for existing indices to avoid KeyErrors
-        valid_coords = [c for c in selected_coords if c in data_loader.tf_louvain.index]
-        temp_df = data_loader.tf_louvain.loc[valid_coords].copy()
-        temp_df['gene'] = temp_df.index
-        return dbc.Table.from_dataframe(temp_df)
-
-    # --- UPDATED CALLBACK: Handles Heatmap Ordering ---
-    @callback(
-            Output(component_id='tf-heatmap', component_property='figure'),
-            Output(component_id='tick-values', component_property='data'),
-            Input(component_id='time-picker', component_property='value'),
-            Input(component_id='heatmap-order', component_property='value') # NEW INPUT
-    )
-    def update_tf_heatmap(time, order_type):
-        corr_df, tick_names = data_loader.get_tf_corr_basic(time)
+        if 'avg' in df_coef.columns: df_coef = df_coef.drop(columns=['avg'])
         
-        # If user wants current timepoint ordering, compute visual structure on the fly
-        if order_type == 'current' and time != timepoints[0]:
-            try:
-                Z = linkage(corr_df.values, method='ward')
-                optimal_order_indices = leaves_list(Z)
-                # Reorder the dataframe and ticks
-                corr_df = corr_df.iloc[optimal_order_indices, optimal_order_indices]
-                tick_names = list(corr_df.columns)
-            except Exception as e:
-                print(f"Clustering failed for visual ordering: {e}")
-                # Fallback to default t0 ordering if it fails
-                pass
+        noise_threshold = 1e-2
+        df_coef = df_coef.loc[(df_coef.abs() > noise_threshold).any(axis=1)]
 
-        fig = go.Figure(
-            go.Heatmap(
-                z=corr_df,
-                x=tick_names,
-                y=tick_names,
-                colorscale=colorscale,
-                zmin=-0.2,
-                zmax=0.3,
-                colorbar=dict(title="Value"),
-                hoverinfo='skip'
-            )
-        )
-        fig.update_layout(
-            height=600,
-            width=600,
-            dragmode='select'
-        )
-        return fig, tick_names
+        x_vals, y_vals, coef_vals, size_vals = [], [], [], []
 
-    @callback(
-        Output(component_id='tf-tf', component_property='figure'),
-        Input(component_id='tf-picker-radial', component_property='value')
-    )
-    def update_tf_tf(gene):
-        if not gene:
-            return go.Figure()
-            
-        corr_df = data_loader.get_tf_corr_df(gene, data_loader.tf_list)
-        tf_list = list(corr_df.sort_values(t0, ascending=False).index)
-        if gene in tf_list:
-            tf_list.remove(gene)
+        for tf in df_coef.index:
+            for time in timepoints:
+                val = df_coef.loc[tf, time]
+                
+                if pd.notna(val) and abs(val) > noise_threshold:
+                    x_vals.append(time)
+                    y_vals.append(tf)
+                    coef_vals.append(val)
+                    
+                    normalized_val = abs(val) / global_max_coef
+                    exaggerated_size = (normalized_val ** 0.75) * 55
+                    size_vals.append(max(exaggerated_size, 8)) 
 
-        offset = 2
-        radii = list(range(offset, len(timepoints) +1 + offset))
-        radii = [r*3 for r in radii]
-
-        r_coords = list(it.pairwise(radii)) * len(tf_list)
-        angle_coords = []
-        for angle in np.linspace(0, 360, num=len(tf_list)+1)[:-1]:
-            angle_coords.extend([angle] * (len(timepoints)))
-
-        colours = corr_df.loc[tf_list].map(lambda x : colors.to_hex(cmap(divnorm(x)))).to_numpy().flatten()
-        corr_values = corr_df.loc[tf_list].to_numpy().flatten()
-
-        fig = go.Figure()
-
-        for r, theta, color, corr in zip(r_coords, angle_coords, colours, corr_values):
-            r1, r2 = r
-            angle = np.deg2rad(theta)
-            x_coords = [r1 * np.cos(angle), r2 * np.cos(angle)]
-            y_coords = [r1 * np.sin(angle), r2 * np.sin(angle)]
-            
-            fig.add_trace(
-                go.Scatter(x = x_coords, y = y_coords, 
-                        mode='lines', line={'color': color, 'width': 4},
-                        hoverinfo='none'
-                        )
-            )
-            fig.add_trace(
-                go.Scatter(x = [np.average(x_coords)], y = [np.average(y_coords)],
-                        mode='markers', marker=dict(color='rgba(0, 0, 0, 0)'), 
-                        text=f'{corr:.2f}',
-                        hoverinfo='text'
-                        )
-            )
-
-        max_radius = np.max(r_coords) + 2.5 if r_coords else 0
-
-        for theta, tf in zip(np.linspace(0, 360, num=len(tf_list)+1)[:-1], tf_list):
-            angle = np.deg2rad(theta)
-            x, y = max_radius * np.cos(angle), max_radius * np.sin(angle)
-            fig.add_annotation(x=x, y=y, text=tf, showarrow=False, textangle=-theta, xanchor="center", yanchor='middle', font={'size':8})
-        
-        fig.add_annotation(x=0, y=0, text=gene, showarrow=False, xanchor="center", yanchor='middle', font={'size':14})
+        fig = go.Figure(go.Scatter(
+            x=x_vals,
+            y=y_vals,
+            mode='markers',
+            marker=dict(
+                size=size_vals,
+                color=coef_vals,
+                colorscale='RdBu_r', 
+                cmin=-global_max_coef, 
+                cmax=global_max_coef,  
+                showscale=True,
+                opacity=1.0,           
+                colorbar=dict(title="Ridge<br>Coefficient"),
+                line=dict(width=1.5, color='white') 
+            ),
+            text=coef_vals,
+            hovertemplate="<b>TF:</b> %{y}<br><b>Time:</b> %{x}<br><b>Coefficient:</b> %{text:.3f}<extra></extra>"
+        ))
 
         fig.update_layout(
-                        autosize=False, width=500, height=500, 
-                        margin=dict(l=5, r=5, t=15, b=5),
-                        showlegend=False, template='plotly_white', 
-                        xaxis_showticklabels=False, yaxis_showticklabels=False, 
-                        xaxis_gridcolor="#ffffff", yaxis_gridcolor="#ffffff"
-                        )
-        fig.update_xaxes(showgrid=False, zeroline=False)
-        fig.update_yaxes(showgrid=False, zeroline=False)
-
+            margin=dict(l=20, r=20, t=50, b=40),
+            xaxis=dict(title="Timepoints", showgrid=True, gridcolor='rgba(0,0,0,0.05)', tickmode='array', tickvals=timepoints),
+            yaxis=dict(title="Upstream TFs", showgrid=True, gridcolor='rgba(0,0,0,0.05)', autorange='reversed'), 
+            plot_bgcolor='white',
+            hovermode='closest'
+        )
+        
         return fig
 
-    @callback(
-        Output(component_id='tf-correlation', component_property='figure'),
-        Input(component_id='tf-picker', component_property='value')
-    )
-    def update_tf_graph(tf_name):
-        if not tf_name:
-            return go.Figure()
-            
-        df_coef = data_loader.get_out_edges_dataframe(tf_name, 'coefficient')
-        if df_coef.empty:
-            return go.Figure()
-            
-        values_range_coef = (np.min(df_coef.values), np.max(df_coef.values))
-
-        dims = [
-            dict(
-                range = values_range_coef,
-                label = f'{t} coefficient',
-                values = df_coef[t]
-            )
-            for t in timepoints
-        ]
-        
-        fig = go.Figure(data=
-                        go.Parcoords(
-                            line_color = '#3182bd',
-                            dimensions = dims
-                        )
-                    )
-        return fig
-
-    @callback(
-        Output(component_id='selected-genes', component_property='children'),
-        State(component_id='tf-correlation', component_property='figure'),
-        Input(component_id='tf-correlation', component_property='restyleData'),
-        Input(component_id='tf-picker', component_property='value')
-    )
-    def update_tf_list(state, restyleData, tf_name):
-        if not tf_name:
-            return "No TF Selected"
-            
-        df_corr = data_loader.get_out_edges_dataframe(tf_name, 'correlation')
-        df_coef = data_loader.get_out_edges_dataframe(tf_name, 'coefficient')
-        merged = df_coef.join(df_corr, rsuffix='_correlation', lsuffix='_coefficient')
-        
-        if state and 'data' in state and state['data'] and 'dimensions' in state['data'][0]:
-            for i, dim in enumerate(state['data'][0]['dimensions']):
-                if 'constraintrange' in dim:
-                    mini, maxi = dim['constraintrange']
-                    # Some versions of plotly return a list of lists if multiple ranges are selected
-                    if isinstance(mini, list):
-                        pass # advanced handling can go here
-                    else:
-                        merged = merged[ (merged[merged.columns[i]] <= maxi) & (merged[merged.columns[i]] >= mini) ]
-        
-        genes = list(merged.index)
-        
-        if len(genes) < 10:
-            base_url = 'https://www.genecards.org/cgi-bin/carddisp.pl?gene='
-            return [dbc.NavLink(gene, href=base_url+gene, external_link=True) for gene in genes]
-
-        return f'Selected {len(genes)} genes. Too many genes to display individually. Try to reduce your selection.'
-
-    @callback(
-        Output(component_id='gene-correlation', component_property='figure'),
-        Input(component_id='gene-picker', component_property='value')
-    )
-    def update_gene_graph(gene_name):
-        if not gene_name:
-            return go.Figure()
-            
-        df_corr = data_loader.get_in_edges_dataframe(gene_name, 'correlation')
-        df_coef = data_loader.get_in_edges_dataframe(gene_name, 'coefficient')
-        
-        if df_corr.empty or df_coef.empty:
-            return go.Figure()
-            
-        values_range_corr = (np.min(df_corr.values), np.max(df_corr.values))
-
-        dims = [
-            dict(
-                range = values_range_corr,
-                label = f'{t} correlation',
-                values = df_corr[t]
-            )
-            for t in timepoints
-        ]
-        
-        fig = go.Figure(data=
-                        go.Parcoords(
-                            line_color = '#3182bd',
-                            dimensions = dims
-                        )
-                    )
-        return fig
-
-    @callback(
-        Output(component_id='selected-tfs', component_property='children'),
-        State(component_id='gene-correlation', component_property='figure'),
-        Input(component_id='gene-correlation', component_property='restyleData'),
-        Input(component_id='gene-picker', component_property='value')
-    )
-    def update_gene_list(state, restyleData, gene_name):
-        if not gene_name:
-            return "No Gene Selected"
-            
-        df_corr = data_loader.get_in_edges_dataframe(gene_name, 'correlation')
-        df_coef = data_loader.get_in_edges_dataframe(gene_name, 'coefficient')
-        merged = df_corr.join(df_coef, rsuffix='_correlation', lsuffix='_coefficient')
-        
-        if state and 'data' in state and state['data'] and 'dimensions' in state['data'][0]:
-            for i, dim in enumerate(state['data'][0]['dimensions']):
-                if 'constraintrange' in dim:
-                    mini, maxi = dim['constraintrange']
-                    if not isinstance(mini, list):
-                        merged = merged[ (merged[merged.columns[i]] <= maxi) & (merged[merged.columns[i]] >= mini) ]
-        
-        genes = list(merged.index)
-        
-        if len(genes) < 10:
-            base_url = 'https://www.genecards.org/cgi-bin/carddisp.pl?gene='
-            return [dbc.NavLink(gene, href=base_url+gene, external_link=True) for gene in genes]
-
-        return f'Selected {len(genes)} TFs. Too many TFs to display. Try to reduce your selection.'
-    
     app.run(debug=True)

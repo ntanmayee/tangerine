@@ -65,6 +65,33 @@ class TangerinePipeline:
             
         self.metacell_dict = generator.generate()
 
+    def _save_metacells_to_parquet(self, tfs):
+        """
+        Filters the generated metacells to include only Transcription Factors,
+        converts them to dense DataFrames, and saves them as fast-loading Parquet files.
+        """
+        logger.info("Saving TF-only metacell expression to Parquet for dashboard...")
+        
+        for time, m_data in self.metacell_dict.items():
+            # Support both AnnData and raw Pandas DataFrames depending on what the generator yields
+            if isinstance(m_data, sc.AnnData):
+                df = m_data.to_df()
+            else:
+                df = pd.DataFrame(m_data)
+
+            # Find which TFs actually exist in this specific expression matrix
+            valid_tfs = [tf for tf in tfs if tf in df.columns]
+
+            # Subset to just the valid TFs to save massive amounts of disk space
+            df_tfs = df[valid_tfs]
+
+            # Save to Parquet
+            file_name = f"metacells_{time}.parquet"
+            save_file = os.path.join(self.save_path, file_name)
+            df_tfs.to_parquet(save_file)
+            
+            logger.info(f"Saved {file_name} with {len(valid_tfs)} TFs.")
+
     def _load_local_gene_annotations(self, bed_file_path, dropout_threshold=50):
         """
         Reads a standard BED file to get genomic coordinates.
@@ -97,6 +124,10 @@ class TangerinePipeline:
         
         # 2. Initialize Prior Scanner & Statistical Inferencer
         scanner = ScannerMotifs(self.genome, scan_width=self.scan_width)
+
+        # Save the TF-only Metacells to disk for the Dashboard 
+        self._save_metacells_to_parquet(scanner.all_tfs)
+
         inferencer = DynamicNetworkInference(self.metacell_dict, self.timepoints, self.time_var)
         
         # 3. Load Coordinates locally

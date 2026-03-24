@@ -72,5 +72,20 @@ class DataLoader(object):
         data_df['avg'] = data_df.mean(axis=1)
         
         return data_df[np.abs(data_df.avg) > threshold]
+    
+    def get_metacell_expression(self, timepoint, tf_list):
+        import os
+        import pandas as pd
+        
+        file_path = os.path.join(self.base_path, f"metacells_{timepoint}.parquet")
+        
+        if not os.path.exists(file_path):
+            return pd.DataFrame()
+            
+        try:
+            return pd.read_parquet(file_path, columns=tf_list)
+        except ValueError:
+            # Triggers if the TFs are somehow missing from the saved parquet file
+            return pd.DataFrame()
 
     
