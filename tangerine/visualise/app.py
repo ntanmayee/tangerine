@@ -191,7 +191,7 @@ def run_app(timepoints, base_path):
 
         fig = go.Figure(go.Heatmap(
             z=df.values, x=df.columns, y=df.index,
-            colorscale='RdBu_r', zmid=0, zmin=-1, zmax=1,
+            colorscale='RdBu_r', zmid=0, zmin=-0.75, zmax=0.75,
             colorbar=dict(title="Spearman"),
             hovertemplate="TF X: %{x}<br>TF Y: %{y}<br>Corr: %{z:.2f}<extra></extra>"
         ))

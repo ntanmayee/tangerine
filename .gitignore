@@ -28,3 +28,12 @@ outs/
 tangerine/visualise/__pycache__/
 run.sh
 qsub_outs/
+data.zip
+embryogenesis_neural/
+gastrulation_results/
+gastrulation_results_new/
+neural.tar.gz
+neural/
+new_code_arid1a.tar.gz
+new_code_arid1a/
+preprocess/
