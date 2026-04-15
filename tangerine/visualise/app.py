@@ -56,7 +56,10 @@ def make_app_layout(app, tf_list, gene_list, timepoints):
                             dbc.Col([
                                 html.H5("Module Evolution", className="mt-3"),
                                 html.P("Tracks cluster membership of TFs selected above.", className="text-muted small"),
-                                dcc.Graph(id='alluvial-plot', style={'height': '280px'})
+                                html.Div(
+                                    dcc.Graph(id='alluvial-plot', style={'height': '280px'}),
+                                    style={'overflowX': 'auto', 'width': '100%'}
+                                )
                             ])
                         ]),
                         
@@ -254,6 +257,8 @@ def run_app(timepoints, base_path):
     app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
     make_app_layout(app, tf_list, gene_list, timepoints)
 
+    vmin, vmax = -0.75, 0.75
+
     # =========================================================================
     # CALLBACKS: TAB 1 (Global Topology & Small Multiples)
     # =========================================================================
@@ -268,7 +273,7 @@ def run_app(timepoints, base_path):
 
         fig = go.Figure(go.Heatmap(
             z=df.values, x=df.columns, y=df.index,
-            colorscale='RdBu_r', zmid=0, zmin=-0.75, zmax=0.75,
+            colorscale='RdBu_r', zmid=0, zmin=vmin, zmax=vmax,
             colorbar=dict(title="Spearman"),
             hovertemplate="TF X: %{x}<br>TF Y: %{y}<br>Corr: %{z:.2f}<extra></extra>"
         ))
@@ -290,12 +295,9 @@ def run_app(timepoints, base_path):
         State('correlation-heatmap', 'figure')
     )
     def update_alluvial_and_chips(selectedData, heatmap_fig):
-        dimensions = data_loader.get_parcat_dimensions()
-        colorscale_parcat = [[0, 'lightgray'], [1, '#E67E22']] 
-        color_array = np.zeros(len(data_loader.tf_louvain), dtype='uint8')
-
         selected_tfs = []
         
+        # 1. Handle Selection Logic 
         if selectedData and heatmap_fig and 'data' in heatmap_fig:
             axis_labels = heatmap_fig['data'][0]['x'] 
             
@@ -318,17 +320,118 @@ def run_app(timepoints, base_path):
                 sel_y = get_selected_labels(axis_labels, y_range)
                 selected_tfs = list(set(sel_x + sel_y))
 
-        if selected_tfs:
-            new_indices = [data_loader.tf_louvain.index.get_loc(tf) for tf in selected_tfs if tf in data_loader.tf_louvain.index]
-            color_array[new_indices] = 1
+        # 2. Extract Sankey Nodes (Unique Clusters)
+        df_clusters = data_loader.tf_louvain
+        time_cols = [t for t in timepoints if t in df_clusters.columns]
+        
+        unique_nodes = []
+        for t in time_cols:
+            unique_nodes.extend(df_clusters[t].dropna().unique())
+            
+        node_idx_map = {node: i for i, node in enumerate(unique_nodes)}
+        
+        # 3. Calculate Node Colors (Average Intra-Cluster Correlation)
+        node_colors = []
+        cmap = mpl.cm.get_cmap('RdBu_r') 
+        norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax) 
+        
+        for node in unique_nodes:
+            t_node = next((t for t in time_cols if str(node).startswith(t)), None)
+                    
+            if t_node:
+                tfs_in_cluster = df_clusters[df_clusters[t_node] == node].index.tolist()
+                corr_df = data_loader.tf_correlation_dfs[t_node]
+                valid_tfs = [tf for tf in tfs_in_cluster if tf in corr_df.index]
+                
+                if len(valid_tfs) > 1:
+                    sub_corr = corr_df.loc[valid_tfs, valid_tfs].values
+                    idx = np.triu_indices_from(sub_corr, k=1)
+                    avg_c = np.nanmean(sub_corr[idx])
+                else:
+                    avg_c = 1.0 
+                    
+                hex_color = mpl.colors.to_hex(cmap(norm(avg_c)))
+                node_colors.append(hex_color)
+            else:
+                node_colors.append('#cccccc') 
 
-        fig = go.Figure(go.Parcats(
-            dimensions=dimensions,
-            line={'colorscale': colorscale_parcat, 'cmin': 0, 'cmax': 1, 'color': color_array, 'shape': 'hspline'},
-            hoverinfo='none'
-        ))
-        fig.update_layout(margin=dict(l=20, r=40, t=20, b=20))
+        # 4. Extract Links, Split Paths, and Build Tooltips
+        sources, targets, values, link_colors, link_customdata = [], [], [], [], []
+        
+        for i in range(len(time_cols) - 1):
+            t1 = time_cols[i]
+            t2 = time_cols[i+1]
+            
+            # Map: (source_cluster, target_cluster, is_selected) -> List of TFs
+            transitions = {}
+            for tf in df_clusters.index:
+                src = df_clusters.loc[tf, t1]
+                tgt = df_clusters.loc[tf, t2]
+                
+                if pd.isna(src) or pd.isna(tgt): continue
+                    
+                is_sel = tf in selected_tfs
+                key = (src, tgt, is_sel)
+                
+                if key not in transitions:
+                    transitions[key] = []
+                transitions[key].append(tf) 
+                
+            # Sort transitions so highlighted arcs (is_sel=True) are drawn on top
+            sorted_transitions = sorted(transitions.items(), key=lambda item: item[0][2])
+            
+            for (src, tgt, is_sel), tfs_in_transition in sorted_transitions:
+                sources.append(node_idx_map[src])
+                targets.append(node_idx_map[tgt])
+                values.append(len(tfs_in_transition)) 
+                
+                link_colors.append('rgba(74, 74, 74, 0.7)' if is_sel else 'rgba(240, 240, 240, 0.5)')
+                
+                # ---> NEW: Build the Tooltip HTML String <---
+                if is_sel:
+                    # Truncate the list if there are more than 8 genes
+                    if len(tfs_in_transition) > 8:
+                        gene_str = ", ".join(tfs_in_transition[:8]) + f" ... (+{len(tfs_in_transition)-8} more)"
+                    else:
+                        gene_str = ", ".join(tfs_in_transition)
+                        
+                    hover_html = f"<b>Highlighted Transition</b><br>{len(tfs_in_transition)} Genes: {gene_str}"
+                else:
+                    hover_html = f"<b>Background Transition</b><br>{len(tfs_in_transition)} Genes"
+                    
+                link_customdata.append(hover_html)
 
+        # 5. Build the Sankey Figure
+        fig = go.Figure(data=[go.Sankey(
+            node = dict(
+              pad = 15,
+              thickness = 20,
+              line = dict(color = "white", width = 0.5),
+              label = unique_nodes,
+              color = node_colors,
+              hoverinfo = 'none' # Keep node tooltips disabled for cleanliness
+            ),
+            link = dict(
+              source = sources,
+              target = targets,
+              value = values,
+              color = link_colors,
+              customdata = link_customdata, # Inject the pre-formatted HTML strings
+              hovertemplate = "%{customdata}<extra></extra>" # <extra></extra> hides the secondary trace box
+            )
+        )])
+        
+        # Calculate dynamic width (150px per timepoint, min 800px) 
+        dynamic_width = max(800, len(time_cols) * 130)
+        
+        # Apply the width to the layout 
+        fig.update_layout(
+            width=dynamic_width, 
+            margin=dict(l=20, r=40, t=20, b=20), 
+            plot_bgcolor='white'
+        )
+
+        # 6. Build the Gene Chips for the UI
         if not selected_tfs:
             chips = [html.Span("Draw a box on the heatmap to select TFs.", className="text-muted")]
             tf_string = "" 
@@ -338,11 +441,12 @@ def run_app(timepoints, base_path):
 
         return fig, chips, f"{len(selected_tfs)} TFs Selected", tf_string
 
+    
     # Importer Callback (Heatmap -> Dropdown) 
     @app.callback(
         Output('gene-tracker-dropdown', 'value'),
         Input('correlation-heatmap', 'selectedData'),
-        State('correlation-heatmap', 'figure') # Added State to read the axis labels
+        State('correlation-heatmap', 'figure') 
     )
     def import_genes_from_heatmap(selectedData, heatmap_fig):
         if not selectedData or not heatmap_fig or 'data' not in heatmap_fig:
@@ -351,13 +455,13 @@ def run_app(timepoints, base_path):
         axis_labels = heatmap_fig['data'][0]['x'] 
         new_selection = []
         
-        # Scenario 1: Plotly returns explicit points (sometimes happens on single clicks)
+        # Scenario 1: Plotly returns explicit points
         if 'points' in selectedData and len(selectedData['points']) > 0 and 'x' in selectedData['points'][0] and isinstance(selectedData['points'][0]['x'], str):
             x_genes = [p['x'] for p in selectedData['points'] if 'x' in p]
             y_genes = [p['y'] for p in selectedData['points'] if 'y' in p]
             new_selection = list(set(x_genes + y_genes))
             
-        # Scenario 2: Plotly returns a bounding box range (Standard for Heatmap Box-Select)
+        # Scenario 2: Plotly returns a bounding box range (Standard for Box-Select)
         elif 'range' in selectedData:
             x_range = selectedData['range']['x']
             y_range = selectedData['range']['y']
@@ -366,7 +470,6 @@ def run_app(timepoints, base_path):
                 res = []
                 min_val, max_val = min(sel_range), max(sel_range)
                 for i, label in enumerate(labels):
-                    # Check if the integer index of the label falls inside the selection box
                     if (i + 0.5) >= min_val and (i - 0.5) <= max_val:
                         res.append(label)
                 return res
@@ -419,11 +522,10 @@ def run_app(timepoints, base_path):
             col_idx = i + 1
             
             fig.add_trace(go.Heatmap(
-                yaxis_autorange='reversed',
                 z=df_subset.values, 
                 x=df_subset.columns, 
                 y=df_subset.index,
-                colorscale='RdBu_r', zmid=0, zmin=-0.8, zmax=0.8,
+                colorscale='RdBu_r', zmid=0, zmin=vmin, zmax=vmax,
                 showscale=(i == 1), # Only show colorbar on the right-most plot
                 colorbar=dict(title="Spearman", thickness=10) if (i == 1) else None,
                 hovertemplate="TF X: %{x}<br>TF Y: %{y}<br>Corr: %{z:.2f}<extra></extra>"
@@ -435,7 +537,7 @@ def run_app(timepoints, base_path):
         )
         
         fig.update_xaxes(showticklabels=False)
-        fig.update_yaxes(showticklabels=False)
+        fig.update_yaxes(showticklabels=False, autorange='reversed')
         
         return fig
 
