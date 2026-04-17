@@ -8,16 +8,32 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, State, dcc, html, no_update
 from plotly.subplots import make_subplots
+from scipy.cluster.hierarchy import fcluster
 
 from tangerine.visualise.data_loader import DataLoader
 from tangerine.visualise.utils import order_dataframe_by_linkage
 
 
-def make_app_layout(app, tf_list, gene_list, timepoints):
+def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
     t0 = timepoints[0]
     t1 = timepoints[1] if len(timepoints) > 1 else timepoints[0]
     tf_chosen = tf_list[0] if tf_list else None
     gene_chosen = gene_list[0] if gene_list else None
+
+    ridge_max = float(np.round(global_max_coef, 3))
+    ridge_step = float(np.round(ridge_max / 50, 4))  # 50 discrete steps
+    if ridge_step == 0:
+        ridge_step = 0.001
+    ridge_default = float(
+        np.round(ridge_max * 0.05, 3)
+    )  # Default to filtering out the bottom 5%
+
+    # Create clean marks for the slider UI
+    ridge_marks = {
+        0: "0",
+        ridge_max / 2: f"{ridge_max / 2:.2f}",
+        ridge_max: f"{ridge_max:.2f}",
+    }
 
     manuscript_config = {
         "toImageButtonOptions": {
@@ -115,6 +131,22 @@ def make_app_layout(app, tf_list, gene_list, timepoints):
                                                             html.P(
                                                                 "Tracks cluster membership of TFs selected above.",
                                                                 className="text-muted small",
+                                                            ),
+                                                            html.Label(
+                                                                "Granularity (\u0394k):",
+                                                                className="small text-muted mb-0",
+                                                            ),
+                                                            dcc.Slider(
+                                                                min=-2,
+                                                                max=5,
+                                                                step=1,
+                                                                value=0,
+                                                                id="sankey-granularity-slider",
+                                                                marks={
+                                                                    -2: "-2",
+                                                                    0: "0",
+                                                                    5: "+5",
+                                                                },
                                                             ),
                                                             html.Div(
                                                                 dcc.Graph(
@@ -282,118 +314,59 @@ def make_app_layout(app, tf_list, gene_list, timepoints):
                                             # The Accordion automatically manages expanding/collapsing
                                             dbc.Accordion(
                                                 [
-                                                    # PANEL 1: Upstream (Target Gene)
-                                                    dbc.AccordionItem(
-                                                        [
-                                                            html.P(
-                                                                "Total upstream influence on a target gene over time (Ridge Regression).",
-                                                                className="text-muted small",
-                                                            ),
-                                                            dbc.InputGroup(
-                                                                [
-                                                                    dbc.InputGroupText(
-                                                                        "Target Gene:"
-                                                                    ),
-                                                                    dbc.Select(
-                                                                        options=[
-                                                                            {
-                                                                                "label": g,
-                                                                                "value": g,
-                                                                            }
-                                                                            for g in gene_list
-                                                                        ],
-                                                                        value=gene_chosen,
-                                                                        id="gene-picker",
-                                                                    ),
-                                                                ],
-                                                                className="mb-3",
-                                                                style={
-                                                                    "width": "300px"
-                                                                },
-                                                            ),
-                                                            html.Div(
-                                                                dcc.Graph(
-                                                                    id="split-streamgraph"
-                                                                ),
-                                                                style={
-                                                                    "overflowY": "auto",
-                                                                    "maxHeight": "600px",
-                                                                    "border": "1px solid #f0f0f0",
-                                                                },
-                                                            ),
-                                                        ],
-                                                        title="1. Upstream Regulators (Who drives this gene?)",
-                                                    ),
-                                                    # PANEL 2: Downstream (TF Targets)
-                                                    dbc.AccordionItem(
-                                                        [
-                                                            html.P(
-                                                                "Explore all genes regulated by a specific TF, colored by Spearman correlation.",
-                                                                className="text-muted small",
-                                                            ),
-                                                            dbc.InputGroup(
-                                                                [
-                                                                    dbc.InputGroupText(
-                                                                        "Regulator TF:"
-                                                                    ),
-                                                                    dbc.Select(
-                                                                        options=[
-                                                                            {
-                                                                                "label": tf,
-                                                                                "value": tf,
-                                                                            }
-                                                                            for tf in tf_list
-                                                                        ],
-                                                                        value=tf_chosen,
-                                                                        id="downstream-tf-picker",
-                                                                    ),
-                                                                ],
-                                                                className="mb-3",
-                                                                style={
-                                                                    "width": "300px"
-                                                                },
-                                                            ),
-                                                            html.Div(
-                                                                dcc.Graph(
-                                                                    id="downstream-heatmap"
-                                                                ),
-                                                                style={
-                                                                    "overflowY": "auto",
-                                                                    "maxHeight": "600px",
-                                                                    "border": "1px solid #f0f0f0",
-                                                                },
-                                                            ),
-                                                        ],
-                                                        title="2. Downstream Targets (What does this TF drive?)",
-                                                    ),
-                                                    # PANEL 3: Co-regulation (Ego Network)
+                                                    # PANEL 3: Co-regulation (Ego Network - SPEARMAN)
                                                     dbc.AccordionItem(
                                                         [
                                                             html.P(
                                                                 "How does a specific TF's relationship with all other TFs evolve over time?",
                                                                 className="text-muted small",
                                                             ),
-                                                            dbc.InputGroup(
+                                                            dbc.Row(
                                                                 [
-                                                                    dbc.InputGroupText(
-                                                                        "Target TF:"
+                                                                    dbc.Col(
+                                                                        dbc.InputGroup(
+                                                                            [
+                                                                                dbc.InputGroupText(
+                                                                                    "Target TF:"
+                                                                                ),
+                                                                                dbc.Select(
+                                                                                    options=[
+                                                                                        {
+                                                                                            "label": tf,
+                                                                                            "value": tf,
+                                                                                        }
+                                                                                        for tf in tf_list
+                                                                                    ],
+                                                                                    value=tf_chosen,
+                                                                                    id="ego-tf-dropdown",
+                                                                                ),
+                                                                            ]
+                                                                        ),
+                                                                        width=4,
                                                                     ),
-                                                                    dbc.Select(
-                                                                        options=[
-                                                                            {
-                                                                                "label": tf,
-                                                                                "value": tf,
-                                                                            }
-                                                                            for tf in tf_list
+                                                                    dbc.Col(
+                                                                        [
+                                                                            html.Label(
+                                                                                "Correlation Threshold:",
+                                                                                className="small text-muted mb-0",
+                                                                            ),
+                                                                            dcc.Slider(
+                                                                                0,
+                                                                                0.8,
+                                                                                step=0.05,
+                                                                                value=0.1,
+                                                                                id="ego-corr-slider",
+                                                                                marks={
+                                                                                    0: "0",
+                                                                                    0.4: "0.4",
+                                                                                    0.8: "0.8",
+                                                                                },
+                                                                            ),
                                                                         ],
-                                                                        value=tf_chosen,
-                                                                        id="ego-tf-dropdown",
+                                                                        width=4,
                                                                     ),
                                                                 ],
-                                                                className="mb-3",
-                                                                style={
-                                                                    "width": "300px"
-                                                                },
+                                                                className="mb-3 align-items-center",
                                                             ),
                                                             html.Div(
                                                                 dcc.Graph(
@@ -406,7 +379,137 @@ def make_app_layout(app, tf_list, gene_list, timepoints):
                                                                 },
                                                             ),
                                                         ],
-                                                        title="3. TF Co-regulation Dynamics",
+                                                        title="TF Co-regulation Dynamics",
+                                                    ),
+                                                    # PANEL 2: Downstream (TF Targets - SPEARMAN)
+                                                    dbc.AccordionItem(
+                                                        [
+                                                            html.P(
+                                                                "Explore all genes regulated by a specific TF, colored by Spearman correlation.",
+                                                                className="text-muted small",
+                                                            ),
+                                                            dbc.Row(
+                                                                [
+                                                                    dbc.Col(
+                                                                        dbc.InputGroup(
+                                                                            [
+                                                                                dbc.InputGroupText(
+                                                                                    "Regulator TF:"
+                                                                                ),
+                                                                                dbc.Select(
+                                                                                    options=[
+                                                                                        {
+                                                                                            "label": tf,
+                                                                                            "value": tf,
+                                                                                        }
+                                                                                        for tf in tf_list
+                                                                                    ],
+                                                                                    value=tf_chosen,
+                                                                                    id="downstream-tf-picker",
+                                                                                ),
+                                                                            ]
+                                                                        ),
+                                                                        width=4,
+                                                                    ),
+                                                                    dbc.Col(
+                                                                        [
+                                                                            html.Label(
+                                                                                "Correlation Threshold:",
+                                                                                className="small text-muted mb-0",
+                                                                            ),
+                                                                            dcc.Slider(
+                                                                                0,
+                                                                                0.8,
+                                                                                step=0.05,
+                                                                                value=0.1,
+                                                                                id="downstream-corr-slider",
+                                                                                marks={
+                                                                                    0: "0",
+                                                                                    0.4: "0.4",
+                                                                                    0.8: "0.8",
+                                                                                },
+                                                                            ),
+                                                                        ],
+                                                                        width=4,
+                                                                    ),
+                                                                ],
+                                                                className="mb-3 align-items-center",
+                                                            ),
+                                                            html.Div(
+                                                                dcc.Graph(
+                                                                    id="downstream-heatmap"
+                                                                ),
+                                                                style={
+                                                                    "overflowY": "auto",
+                                                                    "maxHeight": "600px",
+                                                                    "border": "1px solid #f0f0f0",
+                                                                },
+                                                            ),
+                                                        ],
+                                                        title="Downstream Targets (What does this TF drive?)",
+                                                    ),
+                                                    # PANEL 1: Upstream (Target Gene - RIDGE)
+                                                    dbc.AccordionItem(
+                                                        [
+                                                            html.P(
+                                                                "Total upstream influence on a target gene over time (Ridge Regression).",
+                                                                className="text-muted small",
+                                                            ),
+                                                            dbc.Row(
+                                                                [
+                                                                    dbc.Col(
+                                                                        dbc.InputGroup(
+                                                                            [
+                                                                                dbc.InputGroupText(
+                                                                                    "Target Gene:"
+                                                                                ),
+                                                                                dbc.Select(
+                                                                                    options=[
+                                                                                        {
+                                                                                            "label": g,
+                                                                                            "value": g,
+                                                                                        }
+                                                                                        for g in gene_list
+                                                                                    ],
+                                                                                    value=gene_chosen,
+                                                                                    id="gene-picker",
+                                                                                ),
+                                                                            ]
+                                                                        ),
+                                                                        width=4,
+                                                                    ),
+                                                                    dbc.Col(
+                                                                        [
+                                                                            html.Label(
+                                                                                "Ridge Noise Threshold:",
+                                                                                className="small text-muted mb-0",
+                                                                            ),
+                                                                            dcc.Slider(
+                                                                                min=0,
+                                                                                max=ridge_max,
+                                                                                step=ridge_step,
+                                                                                value=ridge_default,
+                                                                                id="ridge-threshold-slider",
+                                                                                marks=ridge_marks,
+                                                                            ),
+                                                                        ],
+                                                                        width=4,
+                                                                    ),
+                                                                ],
+                                                                className="mb-3 align-items-center",
+                                                            ),
+                                                            html.Div(
+                                                                dcc.Graph(
+                                                                    id="split-streamgraph"
+                                                                ),
+                                                                style={
+                                                                    "overflowY": "auto",
+                                                                    "maxHeight": "600px",
+                                                                    "border": "1px solid #f0f0f0",
+                                                                },
+                                                            ),
+                                                        ],
+                                                        title="Upstream Regulators (Who drives this gene?)",
                                                     ),
                                                 ],
                                                 start_collapsed=False,
@@ -613,7 +716,7 @@ def run_app(timepoints, base_path):
     circular_pos = nx.circular_layout(tf_subgraph)
 
     app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
-    make_app_layout(app, tf_list, gene_list, timepoints)
+    make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef)
 
     vmin, vmax = -0.75, 0.75
 
@@ -658,9 +761,10 @@ def run_app(timepoints, base_path):
         Output("selected-tf-count", "children"),
         Output("copy-clipboard", "content"),
         Input("correlation-heatmap", "selectedData"),
+        Input("sankey-granularity-slider", "value"),
         State("correlation-heatmap", "figure"),
     )
-    def update_alluvial_and_chips(selectedData, heatmap_fig):
+    def update_alluvial_and_chips(selectedData, granularity_offset, heatmap_fig):
         selected_tfs = []
 
         # 1. Handle Selection Logic
@@ -697,8 +801,22 @@ def run_app(timepoints, base_path):
                 selected_tfs = list(set(sel_x + sel_y))
 
         # 2. Extract Sankey Nodes (Unique Clusters)
-        df_clusters = data_loader.tf_louvain
+        df_clusters = data_loader.tf_louvain.copy()
         time_cols = [t for t in timepoints if t in df_clusters.columns]
+
+        for t in time_cols:
+            Z = data_loader.linkage_matrices[t]
+            optimal_k = data_loader.baseline_k[t]
+            new_k = max(2, optimal_k + granularity_offset)
+
+            labels = fcluster(Z, t=new_k, criterion="maxclust")
+
+            tf_names = data_loader.tf_correlation_dfs[t].index
+            label_series = pd.Series(
+                [f"{t}-{int(lbl)}" for lbl in labels], index=tf_names
+            )
+
+            df_clusters[t] = label_series
 
         unique_nodes = []
         for t in time_cols:
@@ -1132,8 +1250,12 @@ def run_app(timepoints, base_path):
     # CALLBACKS: TAB 2 (Targeted Dynamics)
     # =========================================================================
 
-    @app.callback(Output("ego-heatmap", "figure"), Input("ego-tf-dropdown", "value"))
-    def update_1d_heatmap(tf_name):
+    @app.callback(
+        Output("ego-heatmap", "figure"),
+        Input("ego-tf-dropdown", "value"),
+        Input("ego-corr-slider", "value"),
+    )
+    def update_1d_heatmap(tf_name, threshold):
         if not tf_name:
             return go.Figure()
 
@@ -1148,6 +1270,7 @@ def run_app(timepoints, base_path):
             ego_df = ego_df.drop(index=tf_name)
 
         # 3. Cluster
+        ego_df = ego_df.loc[(ego_df.abs() > threshold).any(axis=1)]
         ego_df = order_dataframe_by_linkage(ego_df)
 
         # 4. Calculate dynamic height based on the full list of TFs
@@ -1186,10 +1309,12 @@ def run_app(timepoints, base_path):
         )
         return fig
 
-    @app.callback(Output("split-streamgraph", "figure"), Input("gene-picker", "value"))
-    def update_temporal_dot_plot(
-        gene_name,
-    ):  # Kept the name the same so it plugs right in
+    @app.callback(
+        Output("split-streamgraph", "figure"),
+        Input("gene-picker", "value"),
+        Input("ridge-threshold-slider", "value"),
+    )
+    def update_temporal_dot_plot(gene_name, threshold):
         if not gene_name:
             return go.Figure()
 
@@ -1205,15 +1330,14 @@ def run_app(timepoints, base_path):
         df_coef = df_coef[ordered_timepoints]
 
         # 2. FILTER NOISE: Keep TFs with at least one significant timepoint
-        noise_threshold = 1e-2
-        df_coef = df_coef.loc[(df_coef.abs() > noise_threshold).any(axis=1)]
+        # Apply dynamic noise threshold from the UI
+        df_coef = df_coef.loc[(df_coef.abs() > threshold).any(axis=1)]
 
-        # Empty state fallback if all edges were below the noise threshold
         if df_coef.empty:
             return go.Figure().update_layout(
                 annotations=[
                     dict(
-                        text="No significant upstream regulators found above noise threshold.",
+                        text="No significant upstream regulators found above the current noise threshold.",
                         showarrow=False,
                         font=dict(color="gray"),
                     )
@@ -1223,10 +1347,7 @@ def run_app(timepoints, base_path):
                 plot_bgcolor="white",
             )
 
-        df_coef = df_coef.loc[
-            df_coef.abs().max(axis=1).sort_values(ascending=False).index
-        ]
-
+        # Cluster the dynamically filtered data on the fly!
         df_coef = order_dataframe_by_linkage(df_coef)
 
         plot_height = max(300, len(df_coef) * 20 + 100)
@@ -1265,15 +1386,16 @@ def run_app(timepoints, base_path):
         return fig
 
     @app.callback(
-        Output("downstream-heatmap", "figure"), Input("downstream-tf-picker", "value")
+        Output("downstream-heatmap", "figure"),
+        Input("downstream-tf-picker", "value"),
+        Input("downstream-corr-slider", "value"),
     )
-    def update_downstream_heatmap(tf_name):
+    def update_downstream_heatmap(tf_name, threshold):
         if not tf_name:
             return go.Figure()
 
         # 1. Fetch the data using your native method
         try:
-            # Assuming the edge attribute is literally named 'correlation'
             df_targets = data_loader.get_out_edges_dataframe(
                 tf_name, "correlation", threshold=0.1
             )
@@ -1301,6 +1423,7 @@ def run_app(timepoints, base_path):
 
         ordered_timepoints = [t for t in timepoints if t in df_targets.columns]
         df_targets = df_targets[ordered_timepoints]
+        df_targets = df_targets.loc[(df_targets.abs() > threshold).any(axis=1)]
 
         df_targets = order_dataframe_by_linkage(df_targets)
 
