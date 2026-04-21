@@ -6,7 +6,7 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Dash, Input, Output, State, dcc, html, no_update
+from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
 from plotly.subplots import make_subplots
 from scipy.cluster.hierarchy import fcluster
 
@@ -16,7 +16,7 @@ from tangerine.visualise.utils import order_dataframe_by_linkage
 
 def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
     t0 = timepoints[0]
-    t1 = timepoints[1] if len(timepoints) > 1 else timepoints[0]
+    t1 = timepoints[-1] if len(timepoints) > 1 else timepoints[0]
     tf_chosen = tf_list[0] if tf_list else None
     gene_chosen = gene_list[0] if gene_list else None
 
@@ -72,232 +72,141 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                     # ==========================================================
                     # TAB 1: GLOBAL TOPOLOGY & MODULES
                     # ==========================================================
+                    # ==========================================================
+                    # TAB 1: GLOBAL TOPOLOGY & MODULES
+                    # ==========================================================
                     dbc.Tab(
                         label="Global Topology & Modules",
                         tab_id="tab-1",
+                        active_tab_style={"backgroundColor": "#5c5c5c", "color": "white", "fontWeight": "bold"},
                         children=[
-                            dbc.Row(
-                                [
-                                    # LEFT COLUMN: Heatmap, Alluvial & Gene Chips (Width 7)
-                                    dbc.Col(
-                                        [
-                                            # Top Left: Pre-clustered Correlation Heatmap
-                                            dbc.Row(
-                                                [
-                                                    dbc.Col(
-                                                        [
-                                                            html.H5(
-                                                                "TF Correlation",
-                                                                className="mt-3",
-                                                            ),
-                                                            html.P(
-                                                                "Select a timepoint. Box-select a region to track TFs.",
-                                                                className="text-muted small",
-                                                            ),
-                                                            dcc.Slider(
-                                                                0,
-                                                                len(timepoints) - 1,
-                                                                step=1,
-                                                                marks={
-                                                                    i: t
-                                                                    for i, t in enumerate(
-                                                                        timepoints
-                                                                    )
-                                                                },
-                                                                value=0,
-                                                                id="heatmap-time-slider",
-                                                                className="mb-2",
-                                                            ),
-                                                            dcc.Graph(
-                                                                id="correlation-heatmap",
-                                                                style={
-                                                                    "height": "350px"
-                                                                },
-                                                                config=manuscript_config,
-                                                            ),
-                                                        ]
-                                                    )
-                                                ]
-                                            ),
-                                            # Middle Left: Alluvial
-                                            dbc.Row(
-                                                [
-                                                    dbc.Col(
-                                                        [
-                                                            html.H5(
-                                                                "Module Evolution",
-                                                                className="mt-3",
-                                                            ),
-                                                            html.P(
-                                                                "Tracks cluster membership of TFs selected above.",
-                                                                className="text-muted small",
-                                                            ),
-                                                            html.Label(
-                                                                "Granularity (\u0394k):",
-                                                                className="small text-muted mb-0",
-                                                            ),
-                                                            dcc.Slider(
-                                                                min=-2,
-                                                                max=5,
-                                                                step=1,
-                                                                value=0,
-                                                                id="sankey-granularity-slider",
-                                                                marks={
-                                                                    -2: "-2",
-                                                                    0: "0",
-                                                                    5: "+5",
-                                                                },
-                                                            ),
-                                                            html.Div(
-                                                                dcc.Graph(
-                                                                    id="alluvial-plot",
-                                                                    style={
-                                                                        "height": "280px"
-                                                                    },
-                                                                ),
-                                                                style={
-                                                                    "overflowX": "auto",
-                                                                    "width": "100%",
-                                                                },
-                                                            ),
-                                                        ]
-                                                    )
-                                                ]
-                                            ),
-                                            # Bottom Left: Gene Chip Bank
-                                            dbc.Row(
-                                                [
-                                                    dbc.Col(
-                                                        [
-                                                            dbc.Card(
-                                                                [
-                                                                    dbc.CardHeader(
-                                                                        dbc.Row(
-                                                                            [
-                                                                                dbc.Col(
-                                                                                    html.Strong(
-                                                                                        id="selected-tf-count",
-                                                                                        children="0 TFs Selected",
-                                                                                    )
-                                                                                ),
-                                                                                dbc.Col(
-                                                                                    [
-                                                                                        html.Span(
-                                                                                            "Copy",
-                                                                                            className="text-muted small me-2",
-                                                                                        ),
-                                                                                        dcc.Clipboard(
-                                                                                            id="copy-clipboard",
-                                                                                            style={
-                                                                                                "display": "inline-block",
-                                                                                                "fontSize": "20px",
-                                                                                                "color": "#E67E22",
-                                                                                                "cursor": "pointer",
-                                                                                            },
-                                                                                        ),
-                                                                                    ],
-                                                                                    width="auto",
-                                                                                    className="d-flex align-items-center",
-                                                                                ),
-                                                                            ],
-                                                                            justify="between",
-                                                                        )
-                                                                    ),
-                                                                    dbc.CardBody(
-                                                                        id="gene-chip-container",
-                                                                        style={
-                                                                            "display": "flex",
-                                                                            "flexWrap": "wrap",
-                                                                            "gap": "8px",
-                                                                            "minHeight": "60px",
-                                                                        },
-                                                                    ),
-                                                                ],
-                                                                className="shadow-sm",
-                                                            )
-                                                        ]
-                                                    )
-                                                ],
-                                                className="mt-3",
-                                            ),
-                                        ],
-                                        width=6,
-                                        className="border-end pe-4",
+                            # --------------------------------------------------
+                            # TOP ROW: Global Heatmap (Left) & Sankey (Right)
+                            # --------------------------------------------------
+                            dbc.Row([
+                                # LEFT: Square Global Heatmap (Width 5)
+                                dbc.Col([
+                                    html.H5("Global TF Correlation", className="mt-3 fw-bold"),
+                                    html.P("Select timepoint. Box-select to extract TFs.", className="text-muted small mb-2"),
+                                    html.Div(
+                                        dcc.Slider(
+                                            0,
+                                            len(timepoints) - 1,
+                                            step=1,
+                                            marks={
+                                                i: {
+                                                    "label": t,
+                                                    "style": {
+                                                        # Alternates margin based on whether the index is even or odd
+                                                        "marginTop": "5px" if i % 2 == 0 else "25px",
+                                                        "fontSize": "10px",
+                                                        "whiteSpace": "nowrap",
+                                                    },
+                                                }
+                                                for i, t in enumerate(timepoints)
+                                            },
+                                            value=0,
+                                            id="heatmap-time-slider",
+                                            className="mb-2",
+                                        ),
+                                        style={"paddingBottom": "40px"} # Room for the lower row of text
                                     ),
-                                    # RIGHT COLUMN: Dynamic Module Tracking (Width 5)
-                                    dbc.Col(
-                                        [
-                                            html.H5(
-                                                "Dynamic Module Tracking",
-                                                className="mt-3",
-                                            ),
-                                            html.P(
-                                                "Draw a box on the global heatmap to import genes, then select timepoints to compare.",
-                                                className="text-muted small",
-                                            ),
-                                            # The Editable Dropdown (Single Source of Truth)
-                                            dcc.Dropdown(
-                                                id="gene-tracker-dropdown",
-                                                options=[
-                                                    {"label": g, "value": g}
-                                                    for g in tf_list
-                                                ],
-                                                value=[],
-                                                multi=True,
-                                                placeholder="Select genes or import via heatmap...",
-                                                className="mb-2",
-                                            ),
-                                            # Timepoint Selectors for the Heatmaps
-                                            dbc.InputGroup(
-                                                [
-                                                    dbc.InputGroupText("Compare:"),
-                                                    dbc.Select(
-                                                        options=[
-                                                            {"label": t, "value": t}
-                                                            for t in timepoints
-                                                        ],
-                                                        value=timepoints[0],
-                                                        id="tracker-time-1",
-                                                    ),
-                                                    dbc.InputGroupText("vs"),
-                                                    dbc.Select(
-                                                        options=[
-                                                            {"label": t, "value": t}
-                                                            for t in timepoints
-                                                        ],
-                                                        value=timepoints[-1],
-                                                        id="tracker-time-2",
-                                                    ),
-                                                ],
-                                                className="mb-3",
-                                                size="sm",
-                                            ),
-                                            # Small Multiples Plot
-                                            dcc.Graph(
-                                                id="small-multiples-heatmaps",
-                                                style={
-                                                    "height": "400px",
-                                                    "width": "100%",
-                                                },
-                                            ),
-                                        ],
-                                        width=6,
-                                        className="ps-4",
+                                    dcc.Graph(
+                                        id="correlation-heatmap",
+                                        style={"height": "500px"}, # Forced to be more square
+                                        config=manuscript_config,
                                     ),
-                                ],
-                                className="mb-5",
-                            )
+                                ], width=5, className="border-end pe-4"),
+                                
+                                # RIGHT: Alluvial/Sankey Plot (Width 7)
+                                dbc.Col([
+                                    html.H5("Module Evolution", className="mt-3 fw-bold"),
+                                    html.P("Tracks cluster membership of TFs across time.", className="text-muted small mb-2"),
+                                    html.Div([
+                                        html.Label("Granularity (\u0394k):", className="small text-muted mb-0 me-3 text-nowrap"), 
+                                        html.Div(
+                                            dcc.Slider(
+                                                min=-2, max=5, step=1, value=0, id="sankey-granularity-slider",
+                                                marks={-2: "-2", 0: "0", 5: "+5"}
+                                            ),
+                                            style={"flex": "1"} 
+                                        )
+                                    ], className="mb-3 d-flex align-items-center"),
+                                    html.Div(
+                                        dcc.Graph(id="alluvial-plot", style={"height": "450px"}),
+                                        style={"overflowX": "auto", "width": "100%"},
+                                    ),
+                                ], width=7, className="ps-4"),
+                            ], className="mb-4 mt-2"),
+
+                            html.Hr(className="mb-4 text-muted"), # Visual separator
+
+                            # --------------------------------------------------
+                            # MIDDLE BAR: Dropdown Control & Clipboard
+                            # --------------------------------------------------
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Row([
+                                        dbc.Col([
+                                            html.H5("Toggle Selected TFs:", className="mt-3 fw-bold"),
+                                            html.P("Explore in detail selected TFs. Ordering is anchored to selected timepoint.", className="text-muted small mb-2"),
+                                    ]),
+                                        dbc.Col([
+                                            html.Span("Copy List", className="text-muted small me-2"),
+                                            dcc.Clipboard(id="copy-clipboard", style={"display": "inline-block", "fontSize": "18px", "color": "#158cba", "cursor": "pointer"}),
+                                        ], width="auto", className="text-end")
+                                    ], justify="between"),
+                                    dcc.Dropdown(
+                                        id="gene-tracker-dropdown",
+                                        options=[{"label": g, "value": g} for g in tf_list],
+                                        value=[], multi=True,
+                                        placeholder="Box-select on heatmap to import, or type here...",
+                                        className="shadow-sm"
+                                    ),
+                                ], width=12)
+                            ], className="mb-4"),
+
+                            # --------------------------------------------------
+                            # BOTTOM ROW: 3 Sub-Heatmaps
+                            # --------------------------------------------------
+                            dbc.Row([
+                                # Plot 1: Past/Custom
+                                dbc.Col([
+                                    dbc.Select(
+                                        options=[{"label": f"{t}", "value": t} for t in timepoints],
+                                        value=timepoints[0], id="tracker-time-1", className="mb-2 shadow-sm"
+                                    ),
+                                    dcc.Graph(id="sub-heatmap-1", style={"height": "400px"})
+                                ], width=4),
+                                
+                                # Plot 2: Anchor (Fixed to Global Slider)
+                                dbc.Col([
+                                    html.Div(
+                                        "Selected Timepoint (Anchor)", 
+                                        className="text-center fw-bold text-black bg-secondary rounded py-1 mb-2 shadow-sm",
+                                        id="tracker-time-mid-label"
+                                    ),
+                                    dcc.Graph(id="sub-heatmap-mid", style={"height": "400px"})
+                                ], width=4),
+                                
+                                # Plot 3: Future/Custom
+                                dbc.Col([
+                                    dbc.Select(
+                                        options=[{"label": f"{t}", "value": t} for t in timepoints],
+                                        value=timepoints[-1], id="tracker-time-2", className="mb-2 shadow-sm"
+                                    ),
+                                    dcc.Graph(id="sub-heatmap-2", style={"height": "400px"})
+                                ], width=4),
+                            ], className="mb-5")
                         ],
                     ),
-                    # ==========================================================
-                    # TAB 2: TARGETED DYNAMICS
-                    # ==========================================================
                     # ==========================================================
                     # TAB 2: TARGETED DYNAMICS
                     # ==========================================================
                     dbc.Tab(
                         label="Targeted Dynamics",
                         tab_id="tab-2",
+                        active_tab_style={"backgroundColor": "#5c5c5c", "color": "white", "fontWeight": "bold"},
                         children=[
                             dbc.Row(
                                 [
@@ -310,6 +219,28 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                             html.P(
                                                 "Expand a panel below to explore specific gene or TF regulatory relationships.",
                                                 className="text-muted mb-4",
+                                            ),
+                                            dbc.Card(
+                                                [
+                                                    dbc.CardHeader(
+                                                        html.Strong(
+                                                            id="violin-plot-title",
+                                                            children="Baseline Expression",
+                                                        )
+                                                    ),
+                                                    dbc.CardBody(
+                                                        [
+                                                            dcc.Graph(
+                                                                id="global-expression-violin",
+                                                                style={
+                                                                    "height": "200px"
+                                                                },
+                                                            )
+                                                        ],
+                                                        className="py-2",
+                                                    ),
+                                                ],
+                                                className="mb-4 shadow-sm border-0",
                                             ),
                                             # The Accordion automatically manages expanding/collapsing
                                             dbc.Accordion(
@@ -533,6 +464,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                     dbc.Tab(
                         label="Differential Topology",
                         tab_id="tab-3",
+                        active_tab_style={"backgroundColor": "#5c5c5c", "color": "white", "fontWeight": "bold"},
                         children=[
                             dbc.Row(
                                 [
@@ -572,6 +504,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                                                                         ],
                                                                                         value=t0,
                                                                                         id="diff-time-1",
+                                                                                        style={"minWidth": "90px"}
                                                                                     ),
                                                                                     dbc.InputGroupText(
                                                                                         "vs"
@@ -586,10 +519,10 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                                                                         ],
                                                                                         value=t1,
                                                                                         id="diff-time-2",
+                                                                                        style={"minWidth": "90px"}
                                                                                     ),
                                                                                 ],
                                                                                 className="mb-4",
-                                                                                size="sm",
                                                                             ),
                                                                             html.Label(
                                                                                 "Δ Correlation Threshold:",
@@ -685,7 +618,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
             ),
         ],
         fluid=True,
-        className="px-5",
+        className="dbc px-5",
     )
 
 
@@ -715,7 +648,9 @@ def run_app(timepoints, base_path):
     tf_subgraph = G_base.subgraph([n for n in G_base.nodes if n in tf_list])
     circular_pos = nx.circular_layout(tf_subgraph)
 
-    app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
+    dbc_css = "https://cdn.jsdelivr.net/gh/AnnMarieW/dash-bootstrap-templates/dbc.min.css"
+
+    app = Dash(__name__, external_stylesheets=[dbc.themes.LUMEN, dbc_css])
     make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef)
 
     vmin, vmax = -0.75, 0.75
@@ -757,9 +692,7 @@ def run_app(timepoints, base_path):
 
     @app.callback(
         Output("alluvial-plot", "figure"),
-        Output("gene-chip-container", "children"),
-        Output("selected-tf-count", "children"),
-        Output("copy-clipboard", "content"),
+        Output("copy-clipboard", "content"), # Keep only this and the figure
         Input("correlation-heatmap", "selectedData"),
         Input("sankey-granularity-slider", "value"),
         State("correlation-heatmap", "figure"),
@@ -937,22 +870,8 @@ def run_app(timepoints, base_path):
             plot_bgcolor="white",
         )
 
-        # 6. Build the Gene Chips for the UI
-        if not selected_tfs:
-            chips = [
-                html.Span(
-                    "Draw a box on the heatmap to select TFs.", className="text-muted"
-                )
-            ]
-            tf_string = ""
-        else:
-            chips = [
-                dbc.Badge(tf, color="secondary", className="me-1 fs-6")
-                for tf in selected_tfs
-            ]
-            tf_string = "\n".join(selected_tfs)
-
-        return fig, chips, f"{len(selected_tfs)} TFs Selected", tf_string
+        tf_string = "\n".join(selected_tfs) if selected_tfs else ""
+        return fig, tf_string
 
     # Importer Callback (Heatmap -> Dropdown)
     @app.callback(
@@ -1000,73 +919,71 @@ def run_app(timepoints, base_path):
 
         return new_selection
 
-    # Renderer Callback (Dropdown -> Small Multiples)
     @app.callback(
-        Output("small-multiples-heatmaps", "figure"),
+        Output("sub-heatmap-1", "figure"),
+        Output("sub-heatmap-mid", "figure"),
+        Output("sub-heatmap-2", "figure"),
+        Output("tracker-time-mid-label", "children"),
         Input("gene-tracker-dropdown", "value"),
         Input("tracker-time-1", "value"),
+        Input("heatmap-time-slider", "value"), 
         Input("tracker-time-2", "value"),
     )
-    def update_small_multiples(selected_genes, t1, t2):
+    def update_3_sub_heatmaps(selected_genes, t1, slider_idx, t2):
+        t_mid = timepoints[slider_idx]
+        mid_label = f"Anchor: {t_mid}"
+        
+        empty_fig = go.Figure().update_layout(xaxis=dict(visible=False), yaxis=dict(visible=False), plot_bgcolor="white")
+
         if not selected_genes or not t1 or not t2:
-            return go.Figure().update_layout(
-                annotations=[
-                    dict(
-                        text="Select genes and timepoints to track rewiring.",
-                        showarrow=False,
-                        font=dict(color="gray"),
-                    )
-                ],
-                xaxis=dict(visible=False),
-                yaxis=dict(visible=False),
-                plot_bgcolor="white",
-                margin=dict(l=0, r=0, t=30, b=0),
+            return empty_fig, empty_fig, empty_fig, mid_label
+
+        # 1. Get the data for the Anchor (Middle) timepoint
+        full_df_mid = data_loader.tf_correlation_dfs[t_mid]
+        
+        # Safely extract the genes that exist in the matrix
+        valid_genes = [g for g in selected_genes if g in full_df_mid.index]
+        if len(valid_genes) < 2:
+            return empty_fig, empty_fig, empty_fig, mid_label
+
+        df_mid_subset = full_df_mid.loc[valid_genes, valid_genes]
+        
+        # 2. Cluster the middle subset to get the master ordering
+        # (Using the order_dataframe_by_linkage util you already have)
+        df_mid_ordered = order_dataframe_by_linkage(df_mid_subset)
+        master_order = list(df_mid_ordered.index)
+
+        # 3. Helper function to plot a single heatmap
+        def build_sub_heatmap(t_target):
+            df_target = data_loader.tf_correlation_dfs[t_target]
+            
+            # Extract and force the exact master order
+            df_plot = df_target.loc[master_order, master_order]
+            
+            fig = go.Figure(go.Heatmap(
+                z=df_plot.values, x=df_plot.columns, y=df_plot.index,
+                colorscale="RdBu_r", zmid=0, zmin=vmin, zmax=vmax,
+                showscale=True, 
+                hovertemplate="X: %{x}<br>Y: %{y}<br>Corr: %{z:.2f}<extra></extra>",
+            ))
+            
+            fig.update_layout(
+                plot_bgcolor="white", 
+                margin=dict(l=0, r=0, t=10, b=10),
+                xaxis=dict(showticklabels=False), 
+                yaxis=dict(showticklabels=False, autorange="reversed")
             )
+            return fig
 
-        compare_times = [t1, t2]
+        # 4. Build all three figures
+        fig1 = build_sub_heatmap(t1)
+        fig_mid = build_sub_heatmap(t_mid)
+        fig2 = build_sub_heatmap(t2)
+        
+        # Add the colorbar only to the right-most plot
+        fig2.data[0].update(colorbar=dict(title="Corr", thickness=10))
 
-        # Explicitly create a 1x2 grid
-        fig = make_subplots(
-            rows=1, cols=2, subplot_titles=compare_times, horizontal_spacing=0.05
-        )
-
-        for i, time in enumerate(compare_times):
-            # Fetch the pre-clustered full matrix for this timepoint
-            full_df = data_loader.tf_correlation_dfs[time]
-
-            # Extract subset while preserving global hierarchical order
-            global_order = list(full_df.columns)
-            ordered_subset = [g for g in global_order if g in selected_genes]
-
-            if not ordered_subset:
-                continue
-
-            df_subset = full_df.loc[ordered_subset, ordered_subset]
-            col_idx = i + 1
-
-            fig.add_trace(
-                go.Heatmap(
-                    z=df_subset.values,
-                    x=df_subset.columns,
-                    y=df_subset.index,
-                    colorscale="RdBu_r",
-                    zmid=0,
-                    zmin=vmin,
-                    zmax=vmax,
-                    showscale=(i == 1),  # Only show colorbar on the right-most plot
-                    colorbar=dict(title="Spearman", thickness=10) if (i == 1) else None,
-                    hovertemplate="TF X: %{x}<br>TF Y: %{y}<br>Corr: %{z:.2f}<extra></extra>",
-                ),
-                row=1,
-                col=col_idx,
-            )
-
-        fig.update_layout(plot_bgcolor="white", margin=dict(l=0, r=0, t=30, b=10))
-
-        fig.update_xaxes(showticklabels=False)
-        fig.update_yaxes(showticklabels=False, autorange="reversed")
-
-        return fig
+        return fig1, fig_mid, fig2, mid_label
 
     # =========================================================================
     # CALLBACKS: TAB 3 (Differential Topology)
@@ -1152,7 +1069,7 @@ def run_app(timepoints, base_path):
             x=node_x,
             y=node_y,
             mode="markers+text",
-            marker=dict(size=6, color="#2C3E50", line=dict(width=1, color="white")),
+            marker=dict(size=6, color="#5c5c5c", line=dict(width=1, color="white")),
             text=list(active_nodes),
             textposition="top center",
             textfont=dict(size=9),
@@ -1221,7 +1138,7 @@ def run_app(timepoints, base_path):
                     mode="markers",
                     marker=dict(
                         size=5,
-                        color="#E67E22",
+                        color="#5c5c5c",
                         opacity=1,
                         line=dict(width=0.5, color="white"),
                     ),
@@ -1308,6 +1225,93 @@ def run_app(timepoints, base_path):
             plot_bgcolor="white",
         )
         return fig
+
+    @app.callback(
+        Output("global-expression-violin", "figure"),
+        Output("violin-plot-title", "children"),
+        Input("gene-picker", "value"),
+        Input("downstream-tf-picker", "value"),
+        Input("ego-tf-dropdown", "value"),
+    )
+    def update_global_violin(gene_target, tf_downstream, tf_ego):
+        trigger_id = ctx.triggered_id
+
+        # 1. Define the empty/waiting state
+        empty_fig = go.Figure().update_layout(
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            annotations=[
+                dict(
+                    text="Select a Target Gene or Regulator TF below<br>to view its baseline expression over time.",
+                    xref="paper",
+                    yref="paper",
+                    showarrow=False,
+                    font=dict(color="gray", size=14),
+                )
+            ],
+            plot_bgcolor="white",
+            margin=dict(l=0, r=0, t=30, b=0),
+        )
+
+        # 2. Route the selection
+        if not trigger_id:
+            # Initial boot load: force the empty state
+            return empty_fig, "Baseline Metacell Expression (Awaiting Selection)"
+
+        elif trigger_id == "gene-picker":
+            selected_entity = gene_target
+            source_panel = "Downstream Target Gene"
+        elif trigger_id == "downstream-tf-picker":
+            selected_entity = tf_downstream
+            source_panel = "Upstream Regulator TF"
+        elif trigger_id == "ego-tf-dropdown":
+            selected_entity = tf_ego
+            source_panel = "Co-expressed TF"
+        else:
+            return empty_fig, "Baseline Metacell Expression (Awaiting Selection)"
+
+        # Safety catch if a dropdown is cleared manually
+        if not selected_entity:
+            return empty_fig, "Baseline Metacell Expression (Awaiting Selection)"
+
+        # 3. Build the actual Violin Plot
+        fig = go.Figure()
+
+        for t in timepoints:
+            df_exp = data_loader.get_metacell_expression(t, [selected_entity])
+
+            if not df_exp.empty and selected_entity in df_exp.columns:
+                vals = df_exp[selected_entity].values
+
+                fig.add_trace(
+                    go.Violin(
+                        x=[t] * len(vals),
+                        y=vals,
+                        name=t,
+                        box_visible=True,
+                        meanline_visible=True,
+                        line_color="#5c5c5c",
+                        fillcolor="rgba(92, 92, 92, 0.3)",
+                        showlegend=False,
+                        hovertemplate=f"<b>{t}</b><br>Expression: %{{y:.2f}}<extra></extra>",
+                    )
+                )
+
+        fig.update_layout(
+            margin=dict(l=30, r=20, t=10, b=30),
+            plot_bgcolor="white",
+            yaxis=dict(
+                title="Expression",
+                showgrid=True,          # Enable horizontal lines
+                gridcolor="#e5e5e5",    # Soft light-grey color 
+                zeroline=False          # Hides the thick 0 line if expression is log-normalized
+            ),
+            xaxis=dict(showgrid=False, tickmode="array", tickvals=timepoints),
+        )
+
+        title_text = f"Baseline Metacell Expression: {selected_entity} ({source_panel})"
+
+        return fig, title_text
 
     @app.callback(
         Output("split-streamgraph", "figure"),
