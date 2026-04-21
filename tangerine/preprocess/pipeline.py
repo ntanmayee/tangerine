@@ -3,6 +3,9 @@ import pandas as pd
 import scanpy as sc
 import networkx as nx
 from pathlib import Path
+import pyarrow as pa
+import pyarrow.parquet as pq
+import scipy.sparse as sps
 
 from tangerine.preprocess.metacells import KMeansMetacellGenerator, SEACellsMetacellGenerator
 from tangerine.preprocess.motifs import ScannerMotifs
@@ -65,32 +68,63 @@ class TangerinePipeline:
             
         self.metacell_dict = generator.generate()
 
-    def _save_metacells_to_parquet(self, tfs):
+
+    def _save_metacells_to_parquet(self, genes_to_save, chunk_size=2000):
         """
-        Filters the generated metacells to include only Transcription Factors,
-        converts them to dense DataFrames, and saves them as fast-loading Parquet files.
+        Filters the generated metacells to include TFs and inference genes.
+        Uses chunked Row Group writing to avoid Out-Of-Memory (OOM) crashes
+        when converting massive sparse matrices to dense DataFrames.
         """
-        logger.info("Saving TF-only metacell expression to Parquet for dashboard...")
+        logger.info("Saving metacell expression to Parquet via chunked processing...")
         
         for time, m_data in self.metacell_dict.items():
-            # Support both AnnData and raw Pandas DataFrames depending on what the generator yields
-            if isinstance(m_data, sc.AnnData):
-                df = m_data.to_df()
-            else:
-                df = pd.DataFrame(m_data)
-
-            # Find which TFs actually exist in this specific expression matrix
-            valid_tfs = [tf for tf in tfs if tf in df.columns]
-
-            # Subset to just the valid TFs to save massive amounts of disk space
-            df_tfs = df[valid_tfs]
-
-            # Save to Parquet
             file_name = f"metacells_{time}.parquet"
             save_file = os.path.join(self.save_path, file_name)
-            df_tfs.to_parquet(save_file)
-            
-            logger.info(f"Saved {file_name} with {len(valid_tfs)} TFs.")
+
+            if isinstance(m_data, sc.AnnData):
+                # 1. Pre-slice the sparse matrix natively (zero dense memory cost)
+                valid_genes = [g for g in genes_to_save if g in m_data.var_names]
+                sliced_adata = m_data[:, valid_genes]
+
+                # 2. Ensure matrix is CSR (Compressed Sparse Row) for fast row slicing
+                X = sliced_adata.X
+                if not sps.isspmatrix_csr(X):
+                    X = X.tocsr()
+
+                n_cells = X.shape[0]
+                writer = None
+
+                # 3. Iterate through the matrix in chunks of rows (cells)
+                for start_idx in range(0, n_cells, chunk_size):
+                    end_idx = min(start_idx + chunk_size, n_cells)
+
+                    # Dense-ify ONLY this specific chunk
+                    chunk_dense = X[start_idx:end_idx, :].toarray()
+
+                    # Convert to a temporary DataFrame, then to a PyArrow Table
+                    chunk_df = pd.DataFrame(chunk_dense, columns=valid_genes)
+                    table = pa.Table.from_pandas(chunk_df)
+
+                    # Initialize the Parquet writer on the first chunk
+                    if writer is None:
+                        writer = pq.ParquetWriter(save_file, table.schema)
+                    
+                    # Append the chunk to the file
+                    writer.write_table(table)
+
+                # Close the file connection
+                if writer:
+                    writer.close()
+
+                logger.info(f"Saved {file_name} with {len(valid_genes)} genes across {n_cells} cells.")
+
+            else:
+                # Fallback: If it's already a dense Pandas DataFrame, just filter and save
+                df = pd.DataFrame(m_data)
+                valid_genes = [g for g in genes_to_save if g in df.columns]
+                df[valid_genes].to_parquet(save_file)
+                
+                logger.info(f"Saved {file_name} with {len(valid_genes)} genes (Dense fallback).")
 
     def _load_local_gene_annotations(self, bed_file_path, dropout_threshold=50):
         """
@@ -125,9 +159,6 @@ class TangerinePipeline:
         # 2. Initialize Prior Scanner & Statistical Inferencer
         scanner = ScannerMotifs(self.genome, scan_width=self.scan_width)
 
-        # Save the TF-only Metacells to disk for the Dashboard 
-        self._save_metacells_to_parquet(scanner.all_tfs)
-
         inferencer = DynamicNetworkInference(self.metacell_dict, self.timepoints, self.time_var)
         
         # 3. Load Coordinates locally
@@ -135,6 +166,9 @@ class TangerinePipeline:
         
         # Filter out target genes that happen to be TFs 
         gene_coords_df = gene_coords_df[~gene_coords_df['symbol'].isin(scanner.all_tfs)]
+
+        # make list of genes to save metacell data later
+        good_genes = []
 
         # 4. Main Inference Loop
         logger.info("Starting TF-Gene Network Inference...")
@@ -160,9 +194,15 @@ class TangerinePipeline:
             # Step 4b: Compute Time-Varying Edges
             inferencer.infer_tf_gene_edges(gene, candidate_tfs, dropout_threshold)
 
+            # Append to list
+            good_genes.append(gene)
+
         # 5. Compute TF-TF Co-regulation
         logger.info("Starting TF-TF Co-regulation Inference...")
         inferencer.infer_tf_coregulation(scanner.all_tfs, self.save_path, dropout_threshold)
+
+        # Save the TF-only Metacells to disk for the Dashboard 
+        self._save_metacells_to_parquet(scanner.all_tfs + good_genes)
 
         # 6. Apply Consensus Layout & Save
         self._save_with_consensus_layout(inferencer.networks)
