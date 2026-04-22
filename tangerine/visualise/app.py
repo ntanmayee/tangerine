@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
-from plotly.subplots import make_subplots
 from scipy.cluster.hierarchy import fcluster
 
 from tangerine.visualise.data_loader import DataLoader
@@ -40,6 +39,8 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
             "format": "png",
             "scale": 4,
             "filename": "tangerine_export",
+            # "width": 3000,  
+            # "height": 900,
         }
     }
 
@@ -133,7 +134,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                         )
                                     ], className="mb-3 d-flex align-items-center"),
                                     html.Div(
-                                        dcc.Graph(id="alluvial-plot", style={"height": "450px"}),
+                                        dcc.Graph(id="alluvial-plot", style={"height": "450px"}, config=manuscript_config,),
                                         style={"overflowX": "auto", "width": "100%"},
                                     ),
                                 ], width=7, className="ps-4"),
@@ -176,7 +177,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                         options=[{"label": f"{t}", "value": t} for t in timepoints],
                                         value=timepoints[0], id="tracker-time-1", className="mb-2 shadow-sm"
                                     ),
-                                    dcc.Graph(id="sub-heatmap-1", style={"height": "400px"})
+                                    dcc.Graph(id="sub-heatmap-1", style={"height": "400px"}, config=manuscript_config,)
                                 ], width=4),
                                 
                                 # Plot 2: Anchor (Fixed to Global Slider)
@@ -186,7 +187,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                         className="text-center fw-bold text-black bg-secondary rounded py-1 mb-2 shadow-sm",
                                         id="tracker-time-mid-label"
                                     ),
-                                    dcc.Graph(id="sub-heatmap-mid", style={"height": "400px"})
+                                    dcc.Graph(id="sub-heatmap-mid", style={"height": "400px"}, config=manuscript_config,)
                                 ], width=4),
                                 
                                 # Plot 3: Future/Custom
@@ -195,7 +196,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                         options=[{"label": f"{t}", "value": t} for t in timepoints],
                                         value=timepoints[-1], id="tracker-time-2", className="mb-2 shadow-sm"
                                     ),
-                                    dcc.Graph(id="sub-heatmap-2", style={"height": "400px"})
+                                    dcc.Graph(id="sub-heatmap-2", style={"height": "400px"}, config=manuscript_config,)
                                 ], width=4),
                             ], className="mb-5")
                         ],
@@ -235,6 +236,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                                                 style={
                                                                     "height": "200px"
                                                                 },
+                                                                config=manuscript_config,
                                                             )
                                                         ],
                                                         className="py-2",
@@ -301,7 +303,8 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                                             ),
                                                             html.Div(
                                                                 dcc.Graph(
-                                                                    id="ego-heatmap"
+                                                                    id="ego-heatmap",
+                                                                    config=manuscript_config,
                                                                 ),
                                                                 style={
                                                                     "overflowY": "auto",
@@ -368,7 +371,8 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                                             ),
                                                             html.Div(
                                                                 dcc.Graph(
-                                                                    id="downstream-heatmap"
+                                                                    id="downstream-heatmap",
+                                                                    config=manuscript_config,
                                                                 ),
                                                                 style={
                                                                     "overflowY": "auto",
@@ -431,7 +435,8 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                                             ),
                                                             html.Div(
                                                                 dcc.Graph(
-                                                                    id="split-streamgraph"
+                                                                    id="split-streamgraph",
+                                                                    config=manuscript_config,
                                                                 ),
                                                                 style={
                                                                     "overflowY": "auto",
@@ -561,6 +566,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                                                 style={
                                                                     "height": "600px"
                                                                 },
+                                                                config=manuscript_config,
                                                             )
                                                         ],
                                                         width=8,
@@ -589,6 +595,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                                         dcc.Graph(
                                                             id="scatter-t1",
                                                             style={"height": "320px"},
+                                                            config=manuscript_config,
                                                         ),
                                                         width=12,
                                                         className="mb-3",
@@ -597,6 +604,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                                         dcc.Graph(
                                                             id="scatter-t2",
                                                             style={"height": "320px"},
+                                                            config=manuscript_config,
                                                         ),
                                                         width=12,
                                                     ),
@@ -979,9 +987,6 @@ def run_app(timepoints, base_path):
         fig1 = build_sub_heatmap(t1)
         fig_mid = build_sub_heatmap(t_mid)
         fig2 = build_sub_heatmap(t2)
-        
-        # Add the colorbar only to the right-most plot
-        fig2.data[0].update(colorbar=dict(title="Corr", thickness=10))
 
         return fig1, fig_mid, fig2, mid_label
 
@@ -1069,10 +1074,10 @@ def run_app(timepoints, base_path):
             x=node_x,
             y=node_y,
             mode="markers+text",
-            marker=dict(size=6, color="#5c5c5c", line=dict(width=1, color="white")),
+            marker=dict(size=8, color="#5c5c5c", line=dict(width=1, color="white")),
             text=list(active_nodes),
             textposition="top center",
-            textfont=dict(size=9),
+            textfont=dict(size=14, color="#222222"),
             hoverinfo="none",
         )
 
