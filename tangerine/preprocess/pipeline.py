@@ -6,6 +6,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import scipy.sparse as sps
+import numpy as np
+import json
 
 from tangerine.preprocess.metacells import KMeansMetacellGenerator, SEACellsMetacellGenerator
 from tangerine.preprocess.motifs import ScannerMotifs
@@ -35,6 +37,21 @@ class TangerinePipeline:
         self.metacell_dict = {}
         
         Path(self.save_path).mkdir(parents=True, exist_ok=True)
+
+    def _save_config(self):
+        config = {
+            'adata_path': self.adata_path,
+            'timepoints': self.timepoints,
+            'genome': self.genome,
+            'time_var': self.time_var,
+            'save_path': self.save_path,
+            'scan_width': self.scan_width,
+            'metacell_method': self.metacell_method,
+            'n_pcs': self.n_pcs,
+            'n_neighbors': self.n_neighbors
+        }
+        json.dump(config, os.path.join(self.save_path, 'config.json'))
+        logger.info('Saved run parameters to config.json')
 
     def load_and_preprocess_data(self):
         """Loads the raw AnnData and runs basic scRNA-seq QC/PCA/UMAP."""
@@ -152,6 +169,9 @@ class TangerinePipeline:
     def run(self, bed_file_path, dropout_threshold=50):
         """The main execution loop for the pipeline."""
         
+        # Save parameters to json file before starting pipeline
+        self._save_config()
+        
         # 1. Prepare Data
         self.load_and_preprocess_data()
         self.generate_metacells()
@@ -210,25 +230,58 @@ class TangerinePipeline:
 
     def _save_with_consensus_layout(self, networks):
         """
-        Calculates a stable (x,y) layout across all timepoints so nodes don't jump 
-        around in the Dash visualization, then saves the networks.
+        Calculates a stable (x,y) layout across all timepoints using a high-weight 
+        consensus backbone and Graphviz 'neato' layout.
         """
-        logger.info("Computing consensus graph layout for stable visualization...")
+        logger.info("Computing 90th percentile consensus graph layout for stable visualization...")
         
-        # Build an aggregate graph containing all edges across time
-        consensus_graph = nx.Graph()
+        edge_weights = {}
+        all_nodes = set()
+        
+        # 1. Aggregate total interaction weights and collect all unique nodes
         for time, net in networks.items():
+            for n in net.nodes():
+                all_nodes.add(n)
+                
             for u, v, data in net.edges(data=True):
+                # Sort nodes to treat A->B and B->A as the same layout edge
+                edge_key = tuple(sorted([u, v]))
                 weight = abs(data.get('coefficient', 0)) + abs(data.get('correlation', 0))
-                if consensus_graph.has_edge(u, v):
-                    consensus_graph[u][v]['weight'] += weight
-                else:
-                    consensus_graph.add_edge(u, v, weight=weight)
-                    
-        # Compute layout once (using circular_layout, but could use graphviz later maybe)
-        pos = nx.circular_layout(consensus_graph)
+                edge_weights[edge_key] = edge_weights.get(edge_key, 0) + weight
+
+        # 2. Determine the 90th percentile threshold
+        if not edge_weights:
+            threshold = 0
+        else:
+            threshold = np.percentile(list(edge_weights.values()), 90)
+            logger.info(f"90th percentile edge weight threshold: {threshold:.3f}")
+
+        # 3. Build the consensus graph for layout
+        consensus_graph = nx.Graph()
         
-        # Inject coordinates into individual networks and save
+        # Add all nodes first so isolated/filtered nodes still get an (x,y) position
+        consensus_graph.add_nodes_from(all_nodes)
+        
+        # Add only the strongest backbone edges
+        high_weight_edges = 0
+        for (u, v), weight in edge_weights.items():
+            if weight >= threshold:
+                consensus_graph.add_edge(u, v, weight=weight)
+                high_weight_edges += 1
+                
+        logger.info(f"Layout backbone uses {high_weight_edges} top-tier edges out of {len(edge_weights)} total.")
+
+        # 4. Compute layout using Graphviz 'neato'
+        try:
+            from networkx.drawing.nx_agraph import graphviz_layout
+            pos = graphviz_layout(consensus_graph, prog="neato")
+            logger.info("Successfully generated Graphviz neato layout.")
+        except ImportError:
+            logger.warning("pygraphviz not installed. Falling back to native spring_layout.")
+            # Fallback uses weight to pull connected nodes together, k controls spacing
+            pos = nx.spring_layout(consensus_graph, weight='weight', k=0.15, iterations=50)
+        
+        # 5. Inject coordinates into individual networks and save
         for time in self.timepoints:
             net = networks[time]
             for node in net.nodes():
