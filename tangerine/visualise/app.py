@@ -651,11 +651,6 @@ def run_app(timepoints, base_path):
         if len(data_loader.networks[t0].in_edges(node)) > 0:
             gene_list.append(node)
 
-    # --- Precompute Circular Layout for Consensus Graph ---
-    G_base = data_loader.networks[t0]
-    tf_subgraph = G_base.subgraph([n for n in G_base.nodes if n in tf_list])
-    circular_pos = nx.circular_layout(tf_subgraph)
-
     dbc_css = "https://cdn.jsdelivr.net/gh/AnnMarieW/dash-bootstrap-templates/dbc.min.css"
 
     app = Dash(__name__, external_stylesheets=[dbc.themes.LUMEN, dbc_css])
@@ -1015,7 +1010,13 @@ def run_app(timepoints, base_path):
         hover_x, hover_y, hover_text, hover_customdata = [], [], [], []
         active_nodes = set()
 
-        nodes = list(circular_pos.keys())
+        # Extract the saved consensus coordinates directly from the GML data 
+        base_network = data_loader.networks[t1]
+        node_pos = {n: (data.get('x', 0), data.get('y', 0)) for n, data in base_network.nodes(data=True)}
+        
+        # Only iterate over nodes that actually have coordinates saved
+        nodes = list(node_pos.keys())
+        # -------------------------------------------------------------------------------------
 
         for u, v in itertools.combinations(nodes, 2):
             if u in delta_df.index and v in delta_df.columns:
@@ -1024,8 +1025,9 @@ def run_app(timepoints, base_path):
                 if abs(delta) >= threshold:
                     active_nodes.update([u, v])
 
-                    x0, y0 = circular_pos[u]
-                    x1, y1 = circular_pos[v]
+                    # Look up the dynamic coordinates instead of the hardcoded global ones
+                    x0, y0 = node_pos[u]
+                    x1, y1 = node_pos[v]
 
                     if delta > 0:
                         pos_edge_x.extend([x0, x1, None])
@@ -1067,8 +1069,8 @@ def run_app(timepoints, base_path):
             hovertemplate="%{text}<extra></extra>",
         )
 
-        node_x = [circular_pos[n][0] for n in active_nodes]
-        node_y = [circular_pos[n][1] for n in active_nodes]
+        node_x = [node_pos[n][0] for n in active_nodes]
+        node_y = [node_pos[n][1] for n in active_nodes]
 
         node_trace = go.Scatter(
             x=node_x,
@@ -1087,7 +1089,7 @@ def run_app(timepoints, base_path):
         fig.update_layout(
             showlegend=False,
             hovermode="closest",
-            margin=dict(b=20, l=20, r=20, t=20),
+            margin=dict(b=40, l=40, r=40, t=40),
             xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
             plot_bgcolor="white",
