@@ -89,34 +89,42 @@ class TangerinePipeline:
     def _save_metacells_to_parquet(self, genes_to_save, chunk_size=2000):
         """
         Filters the generated metacells to include TFs and inference genes.
-        Uses chunked Row Group writing to avoid Out-Of-Memory (OOM) crashes
-        when converting massive sparse matrices to dense DataFrames.
+        Safely handles both sparse and dense matrices and removes duplicate genes.
         """
         logger.info("Saving metacell expression to Parquet via chunked processing...")
+        
+        # FIX 1: Strip duplicates from the incoming list (BED files cause duplicates)
+        # Using dict.fromkeys() removes duplicates while preserving the original list order
+        unique_genes_to_save = list(dict.fromkeys(genes_to_save))
         
         for time, m_data in self.metacell_dict.items():
             file_name = f"metacells_{time}.parquet"
             save_file = os.path.join(self.save_path, file_name)
 
             if isinstance(m_data, sc.AnnData):
-                # 1. Pre-slice the sparse matrix natively (zero dense memory cost)
-                valid_genes = [g for g in genes_to_save if g in m_data.var_names]
+                # Pre-slice the matrix 
+                valid_genes = [g for g in unique_genes_to_save if g in m_data.var_names]
                 sliced_adata = m_data[:, valid_genes]
 
-                # 2. Ensure matrix is CSR (Compressed Sparse Row) for fast row slicing
                 X = sliced_adata.X
-                if not sps.isspmatrix_csr(X):
+                
+                # FIX 2: Safely check if the matrix is sparse before calling sparse methods
+                is_sparse = sps.issparse(X)
+                if is_sparse and not sps.isspmatrix_csr(X):
                     X = X.tocsr()
 
                 n_cells = X.shape[0]
                 writer = None
 
-                # 3. Iterate through the matrix in chunks of rows (cells)
+                # Iterate through the matrix in chunks of rows (cells)
                 for start_idx in range(0, n_cells, chunk_size):
                     end_idx = min(start_idx + chunk_size, n_cells)
 
-                    # Dense-ify ONLY this specific chunk
-                    chunk_dense = X[start_idx:end_idx, :].toarray()
+                    # FIX 3: Extract chunk based on whether it is sparse or dense
+                    if is_sparse:
+                        chunk_dense = X[start_idx:end_idx, :].toarray()
+                    else:
+                        chunk_dense = X[start_idx:end_idx, :]
 
                     # Convert to a temporary DataFrame, then to a PyArrow Table
                     chunk_df = pd.DataFrame(chunk_dense, columns=valid_genes)
@@ -138,7 +146,7 @@ class TangerinePipeline:
             else:
                 # Fallback: If it's already a dense Pandas DataFrame, just filter and save
                 df = pd.DataFrame(m_data)
-                valid_genes = [g for g in genes_to_save if g in df.columns]
+                valid_genes = [g for g in unique_genes_to_save if g in df.columns]
                 df[valid_genes].to_parquet(save_file)
                 
                 logger.info(f"Saved {file_name} with {len(valid_genes)} genes (Dense fallback).")
