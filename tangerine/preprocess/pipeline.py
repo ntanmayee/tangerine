@@ -235,63 +235,60 @@ class TangerinePipeline:
         self._save_metacells_to_parquet(scanner.all_tfs + good_genes)
 
         # 6. Apply Consensus Layout & Save
-        self._save_with_consensus_layout(inferencer.networks)
+        self._save_with_consensus_layout(inferencer.networks, inferencer.tf_corr_dfs)
         logger.info("Pipeline Execution Complete!")
 
-    def _save_with_consensus_layout(self, networks):
+    def _save_with_consensus_layout(self, networks, tf_corr_dfs):
         """
-        Calculates a stable (x,y) layout across all timepoints using a high-weight 
-        consensus backbone and Graphviz 'neato' layout.
+        Calculates a stable (x,y) layout across all timepoints using the Volatility 
+        (Max - Min correlation) of TF-TF relationships. Highly dynamic TFs are pushed apart.
         """
-        logger.info("Computing 90th percentile consensus graph layout for stable visualization...")
+        logger.info("Computing consensus layout based on TF-TF volatility (Delta Correlation)...")
         
-        edge_weights = {}
-        all_nodes = set()
-        
-        # 1. Aggregate total interaction weights and collect all unique nodes
-        for time, net in networks.items():
-            for n in net.nodes():
-                all_nodes.add(n)
-                
-            for u, v, data in net.edges(data=True):
-                # Sort nodes to treat A->B and B->A as the same layout edge
-                edge_key = tuple(sorted([u, v]))
-                weight = abs(data.get('coefficient', 0)) + abs(data.get('correlation', 0))
-                edge_weights[edge_key] = edge_weights.get(edge_key, 0) + weight
+        # 1. Stack all TF-TF correlation matrices into a 3D NumPy array
+        tfs = list(tf_corr_dfs.values())[0].index
+        stacked_corr = np.stack([df.loc[tfs, tfs].values for df in tf_corr_dfs.values()], axis=0)
 
-        # 2. Determine the 90th percentile threshold
-        if not edge_weights:
-            threshold = 0
-        else:
-            threshold = np.percentile(list(edge_weights.values()), 90)
-            logger.info(f"90th percentile edge weight threshold: {threshold:.3f}")
+        # 2. Calculate Volatility (Delta = Max - Min)
+        max_corr = np.max(stacked_corr, axis=0)
+        min_corr = np.min(stacked_corr, axis=0)
+        delta_matrix = max_corr - min_corr
 
-        # 3. Build the consensus graph for layout
+        # 3. Extract the upper triangle to avoid duplicate edges and self-loops
+        iu1 = np.triu_indices(len(tfs), k=1)
+        deltas = delta_matrix[iu1]
+
+        # 4. Find the 90th percentile threshold for volatility
+        threshold = np.percentile(deltas, 90)
+        logger.info(f"90th percentile volatility (Delta) threshold: {threshold:.3f}")
+
+        # 5. Build the layout backbone graph
         consensus_graph = nx.Graph()
         
-        # Add all nodes first so isolated/filtered nodes still get an (x,y) position
-        consensus_graph.add_nodes_from(all_nodes)
-        
-        # Add only the strongest backbone edges
+        # Add all nodes first so stable/filtered nodes still get an (x,y) position
+        consensus_graph.add_nodes_from(tfs)
+
         high_weight_edges = 0
-        for (u, v), weight in edge_weights.items():
-            if weight >= threshold:
-                consensus_graph.add_edge(u, v, weight=weight)
+        for i, j in zip(iu1[0], iu1[1]):
+            delta_val = delta_matrix[i, j]
+            if delta_val >= threshold:
+                u, v = tfs[i], tfs[j] 
+                # A larger delta means a larger ideal distance, pushing volatile TFs apart.
+                consensus_graph.add_edge(u, v, len=float(delta_val))
                 high_weight_edges += 1
                 
-        logger.info(f"Layout backbone uses {high_weight_edges} top-tier edges out of {len(edge_weights)} total.")
+        logger.info(f"Layout backbone uses {high_weight_edges} highly volatile TF-TF edges.")
 
-        # 4. Compute layout using Graphviz 'neato'
+        # 6. Compute layout using Graphviz 'neato'
         try:
             from networkx.drawing.nx_agraph import graphviz_layout
             pos = graphviz_layout(consensus_graph, prog="neato")
             logger.info("Successfully generated Graphviz neato layout.")
         except ImportError:
-            logger.warning("pygraphviz not installed. Falling back to native spring_layout.")
-            # Fallback uses weight to pull connected nodes together, k controls spacing
-            pos = nx.spring_layout(consensus_graph, weight='weight', k=0.15, iterations=50)
+            logger.warning("pygraphviz not installed. Falling back to spring_layout.")
+            pos = nx.spring_layout(consensus_graph, k=0.5, iterations=50)
         
-        # 5. Inject coordinates into individual networks and save
+        # 7. Inject coordinates into the original TF-Gene bipartite networks and save
         for time in self.timepoints:
             net = networks[time]
             for node in net.nodes():
