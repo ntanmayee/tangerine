@@ -50,7 +50,9 @@ class TangerinePipeline:
             'n_pcs': self.n_pcs,
             'n_neighbors': self.n_neighbors
         }
-        json.dump(config, os.path.join(self.save_path, 'config.json'))
+        save_file = os.path.join(self.save_path, 'config.json')
+        with open(save_file, 'w') as f:
+            json.dump(config, f, indent=4)
         logger.info('Saved run parameters to config.json')
 
     def load_and_preprocess_data(self):
