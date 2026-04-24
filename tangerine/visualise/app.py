@@ -3,6 +3,7 @@ import itertools
 import dash_bootstrap_components as dbc
 import matplotlib as mpl
 import networkx as nx
+import dash_cytoscape as cyto
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -39,8 +40,8 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
             "format": "png",
             "scale": 4,
             "filename": "tangerine_export",
-            # "width": 3000,  
-            # "height": 900,
+            "width": 500,  
+            "height": 250,
         }
     }
 
@@ -527,8 +528,19 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                                                                         style={"minWidth": "90px"}
                                                                                     ),
                                                                                 ],
-                                                                                className="mb-4",
+                                                                                className="mb-2",
                                                                             ),
+                                                                            html.Div(
+                                                                                [
+                                                                                    html.Span(style={"display": "inline-block", "width": "15px", "height": "3px", "backgroundColor": "#e74c3c", "marginRight": "5px", "verticalAlign": "middle"}),
+                                                                                    html.Span("Increase", className="small text-muted me-3", style={"verticalAlign": "middle"}),
+                                                                                    
+                                                                                    html.Span(style={"display": "inline-block", "width": "15px", "height": "3px", "backgroundColor": "#3498db", "marginRight": "5px", "verticalAlign": "middle"}),
+                                                                                    html.Span("Decrease", className="small text-muted", style={"verticalAlign": "middle"}),
+                                                                                ],
+                                                                                className="mb-3 d-flex align-items-center"
+                                                                            ),
+                                                                            
                                                                             html.Label(
                                                                                 "Δ Correlation Threshold:",
                                                                                 className="fw-bold small mb-1",
@@ -558,15 +570,80 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
                                                         ],
                                                         width=4,
                                                     ),
-                                                    # Circular Layout Graph
+                                                    
+                                                    # Circular / Cytoscape Layout Graph
                                                     dbc.Col(
                                                         [
-                                                            dcc.Graph(
-                                                                id="differential-circular-graph",
-                                                                style={
-                                                                    "height": "600px"
+                                                            cyto.Cytoscape(
+                                                                id="differential-cytoscape-graph",
+                                                                layout={
+                                                                    "name": "cose",
+                                                                    "fit": True,
+                                                                    "padding": 50,
+                                                                    
+                                                                    # 1. Fix the top-left clustering:
+                                                                    "randomize": True, 
+                                                                    
+                                                                    # 2. Fix the text overlap mathematically:
+                                                                    "nodeDimensionsIncludeLabels": True, 
+                                                                    
+                                                                    # 3. Force the network to stretch out:
+                                                                    "nodeRepulsion": 100000, # Massive repulsion (default is 400k)
+                                                                    "idealEdgeLength": 5,   # Force longer edges (default is 50)
+                                                                    "edgeElasticity": 100,     # Make edges stretchier (default is 100)
+                                                                    "gravity": 0.5,          # Nearly zero gravity so nodes drift apart
+                                                                    
+                                                                    "numIter": 2000,          # Give the physics engine more time to settle
                                                                 },
-                                                                config=manuscript_config,
+                                                                style={"width": "100%", "height": "600px"},
+                                                                elements=[], # Will be populated by callback
+                                                                stylesheet=[
+                                                                    # Node Styling (With text halos for readability!)
+                                                                    {
+                                                                        "selector": "node",
+                                                                        "style": {
+                                                                            "label": "data(label)",
+                                                                            "font-size": "14px",
+                                                                            "color": "#222222",
+                                                                            "text-valign": "top",
+                                                                            "text-halign": "center",
+                                                                            "background-color": "#5c5c5c",
+                                                                            "width": "12px",
+                                                                            "height": "12px",
+                                                                            "text-outline-color": "white",
+                                                                            "text-outline-width": "2px",
+                                                                        }
+                                                                    },
+                                                                    # Base Edge Styling
+                                                                    {
+                                                                        "selector": "edge",
+                                                                        "style": {
+                                                                            "width": 2,
+                                                                            "opacity": 0.25,
+                                                                            "curve-style": "bezier", # Smooth curves
+                                                                            
+                                                                        }
+                                                                    },
+                                                                    # Positive / Negative edge colors
+                                                                    {
+                                                                        "selector": ".positive",
+                                                                        "style": {"line-color": "#e74c3c"} # Red
+                                                                    },
+                                                                    {
+                                                                        "selector": ".negative",
+                                                                        "style": {"line-color": "#3498db"} # Blue
+                                                                    },
+                                                                    # 0ms Latency Hover Highlight!
+                                                                    {
+                                                                        "selector": "edge:hover",
+                                                                        "style": {
+                                                                            "opacity": 1.0,
+                                                                            "width": 5,
+                                                                            "z-index": 9999,
+                                                                            "text-opacity": 1.0,
+                                                                        }
+                                                                    }
+                                                                ]
                                                             )
                                                         ],
                                                         width=8,
@@ -990,120 +1067,60 @@ def run_app(timepoints, base_path):
     # =========================================================================
 
     @app.callback(
-        Output("differential-circular-graph", "figure"),
+        Output("differential-cytoscape-graph", "elements"), # Outputs elements, not a figure
         Input("diff-time-1", "value"),
         Input("diff-time-2", "value"),
         Input("delta-threshold", "value"),
     )
     def update_diff_graph(t1, t2, threshold):
         if not t1 or not t2:
-            return go.Figure()
+            return []
 
         df1 = data_loader.tf_correlation_dfs[t1]
         df2 = data_loader.tf_correlation_dfs[t2]
         delta_df = df2 - df1
         delta_df = delta_df.fillna(0)
 
-        pos_edge_x, pos_edge_y = [], []
-        neg_edge_x, neg_edge_y = [], []
-
-        hover_x, hover_y, hover_text, hover_customdata = [], [], [], []
+        elements = []
         active_nodes = set()
+        nodes = list(delta_df.index)
 
-        # Extract the saved consensus coordinates directly from the GML data 
-        base_network = data_loader.networks[t1]
-        node_pos = {n: (data.get('x', 0), data.get('y', 0)) for n, data in base_network.nodes(data=True)}
-        
-        # Only iterate over nodes that actually have coordinates saved
-        nodes = list(node_pos.keys())
-        # -------------------------------------------------------------------------------------
-
+        # 1. Build the Edges
         for u, v in itertools.combinations(nodes, 2):
             if u in delta_df.index and v in delta_df.columns:
                 delta = delta_df.loc[u, v]
 
                 if abs(delta) >= threshold:
                     active_nodes.update([u, v])
+                    
+                    # Assign a class based on correlation direction for our stylesheet
+                    color_class = "positive" if delta > 0 else "negative"
+                    
+                    elements.append({
+                        "data": {
+                            "source": u, 
+                            "target": v, 
+                            "delta": float(delta), # Store delta for the click callback later
+                        },
+                        "classes": color_class
+                    })
 
-                    # Look up the dynamic coordinates instead of the hardcoded global ones
-                    x0, y0 = node_pos[u]
-                    x1, y1 = node_pos[v]
+        # 2. Build the Nodes
+        for node in active_nodes:
+            elements.append({
+                "data": {"id": node, "label": node}
+            })
 
-                    if delta > 0:
-                        pos_edge_x.extend([x0, x1, None])
-                        pos_edge_y.extend([y0, y1, None])
-                    else:
-                        neg_edge_x.extend([x0, x1, None])
-                        neg_edge_y.extend([y0, y1, None])
-
-                    hover_x.append((x0 + x1) / 2)
-                    hover_y.append((y0 + y1) / 2)
-                    hover_text.append(
-                        f"<b>{u} ↔ {v}</b><br>Δ Corr: {delta:.3f}<br><i>Click for expression</i>"
-                    )
-                    hover_customdata.append([u, v])
-
-        pos_edge_trace = go.Scatter(
-            x=pos_edge_x,
-            y=pos_edge_y,
-            mode="lines",
-            line=dict(width=1.5, color="rgba(231, 76, 60, 0.7)"),
-            hoverinfo="none",
-        )
-
-        neg_edge_trace = go.Scatter(
-            x=neg_edge_x,
-            y=neg_edge_y,
-            mode="lines",
-            line=dict(width=1.5, color="rgba(52, 152, 219, 0.7)"),
-            hoverinfo="none",
-        )
-
-        edge_hover_trace = go.Scatter(
-            x=hover_x,
-            y=hover_y,
-            mode="markers",
-            marker=dict(size=12, color="rgba(0,0,0,0)"),
-            text=hover_text,
-            customdata=hover_customdata,
-            hovertemplate="%{text}<extra></extra>",
-        )
-
-        node_x = [node_pos[n][0] for n in active_nodes]
-        node_y = [node_pos[n][1] for n in active_nodes]
-
-        node_trace = go.Scatter(
-            x=node_x,
-            y=node_y,
-            mode="markers+text",
-            marker=dict(size=8, color="#5c5c5c", line=dict(width=1, color="white")),
-            text=list(active_nodes),
-            textposition="top center",
-            textfont=dict(size=14, color="#222222"),
-            hoverinfo="none",
-        )
-
-        fig = go.Figure(
-            data=[pos_edge_trace, neg_edge_trace, edge_hover_trace, node_trace]
-        )
-        fig.update_layout(
-            showlegend=False,
-            hovermode="closest",
-            margin=dict(b=40, l=40, r=40, t=40),
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            plot_bgcolor="white",
-        )
-        return fig
+        return elements
 
     @app.callback(
         Output("scatter-t1", "figure"),
         Output("scatter-t2", "figure"),
-        Input("differential-circular-graph", "clickData"),
+        Input("differential-cytoscape-graph", "tapEdgeData"), 
         State("diff-time-1", "value"),
         State("diff-time-2", "value"),
     )
-    def update_scatterplots(clickData, t1, t2):
+    def update_scatterplots(edgeData, t1, t2):
         empty_fig = go.Figure().update_layout(
             xaxis=dict(visible=False),
             yaxis=dict(visible=False),
@@ -1119,10 +1136,14 @@ def run_app(timepoints, base_path):
             plot_bgcolor="white",
             margin=dict(l=0, r=0, t=30, b=0),
         )
-        if not clickData or not t1 or not t2:
+        
+        # If no edge has been clicked yet, return empty
+        if not edgeData or not t1 or not t2:
             return empty_fig, empty_fig
 
-        tf_u, tf_v = clickData["points"][0]["customdata"]
+        # Unpack from Cytoscape's native edge data format
+        tf_u = edgeData["source"]
+        tf_v = edgeData["target"]
 
         def create_scatter(time, tf_x, tf_y):
             df_exp = data_loader.get_metacell_expression(time, [tf_x, tf_y])
@@ -1154,12 +1175,12 @@ def run_app(timepoints, base_path):
             fig.update_layout(
                 title=dict(
                     text=f"<b>{time}</b> (Spearman ρ = {corr_val:.2f})",
-                    font=dict(size=12),
+                    font=dict(size=14),
                     x=0.5,
                     xanchor="center",
                 ),
-                xaxis_title=dict(text=tf_x, font=dict(size=10)),
-                yaxis_title=dict(text=tf_y, font=dict(size=10)),
+                xaxis_title=dict(text=tf_x, font=dict(size=12)),
+                yaxis_title=dict(text=tf_y, font=dict(size=12)),
                 margin=dict(l=30, r=10, t=30, b=30),
                 plot_bgcolor="rgba(240,240,240,0.5)",
             )
