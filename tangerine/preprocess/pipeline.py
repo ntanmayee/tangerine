@@ -282,7 +282,7 @@ class TangerinePipeline:
         # 6. Compute layout using Graphviz 'neato'
         try:
             from networkx.drawing.nx_agraph import graphviz_layout
-            pos = graphviz_layout(consensus_graph, prog="neato")
+            pos = graphviz_layout(consensus_graph, prog="neato", args="-Goverlap=false -Gsep=+3 -Gsplines=true")
             logger.info("Successfully generated Graphviz neato layout.")
         except ImportError:
             logger.warning("pygraphviz not installed. Falling back to spring_layout.")
