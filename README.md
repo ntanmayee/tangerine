@@ -5,8 +5,16 @@
 -------
 **Tangerine** (Transcription Factor Accessibility Network and Gene Expression Regulation) is a tool to quantify the effect of transcription factor binding on gene regulation.
 
+<video src="https://github-production-user-asset-6210df.s3.amazonaws.com/4715039/583460881-ecf7e406-0bab-4a5e-a826-53270cc1fc57.mp4" autoplay loop muted playsinline width="100%"></video>
+
 ## Install
-Clone the repository and install with poetry by running these commands
+Clone the repository 
+```bash
+git clone git@github.com:ntanmayee/tangerine.git
+cd tangerine
+```
+
+Install `tangerine` with poetry by running these commands
 
 ```bash
 conda config --add channels bioconda
@@ -15,6 +23,7 @@ conda create -n tang python=3.10 scanpy python-igraph leidenalg typer poetry pys
 
 pip install dash gimmemotifs --no-cache-dir
 conda install dash-bootstrap-components
+pip install dash-cytoscape==0.2.0
 poetry install --only-root
 ```
 
