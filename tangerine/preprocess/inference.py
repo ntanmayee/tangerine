@@ -223,5 +223,3 @@ class DynamicNetworkInference:
 
         cluster_df.to_csv(join(save_path, 'louvain_tf.csv'))
         logger.info('Saved independently ordered matrices and dynamic clustering results to file.')
-
-        self.tf_corr_dfs = corr_dfs
