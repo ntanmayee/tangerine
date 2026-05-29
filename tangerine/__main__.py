@@ -30,7 +30,8 @@ def process(
     scan_width: int = typer.Option(10000, '--scan_width', '-sw', help='Length of window upstream of promoter to search for motifs'),
     metacell_method: str = typer.Option('kmeans', '--metacell_method', '-m', help='Method for generating metacells: "kmeans" or "seacells"'),
     dropout_threshold: int = typer.Option(50, '--dropout_threshold', '-dt', help='Maximum dropout percentage to keep a TF'),
-    save_name: Optional[Path] = typer.Option(None, '--save_path', '-sp', help='Path to save results')
+    save_name: Optional[Path] = typer.Option(None, '--save_path', '-sp', help='Path to save results'),
+    cells_per_metacell: int = typer.Option(20, '--cells_per_metacell', '-c_meta', help='Cells per metacell')
 ):
     print_message()
     
@@ -50,7 +51,8 @@ def process(
         save_name=save_name,
         bed_file_path=bed_file_path,
         metacell_method=metacell_method,
-        dropout_threshold=dropout_threshold
+        dropout_threshold=dropout_threshold,
+        cells_per_metacell=cells_per_metacell
     )
     
 @app.command('visualise')

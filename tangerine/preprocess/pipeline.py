@@ -20,7 +20,8 @@ class TangerinePipeline:
     Handles data loading, metacell generation, motif scanning, and network inference.
     """
     def __init__(self, adata_path, timepoints, genome, time_var, save_path,
-                 metacell_method='kmeans', n_pcs=35, n_neighbors=100, scan_width=10000):
+                 metacell_method='kmeans', n_pcs=35, n_neighbors=100, scan_width=10000,
+                 cells_per_metacell=20):
         
         self.adata_path = adata_path
         self.timepoints = timepoints
@@ -29,6 +30,7 @@ class TangerinePipeline:
         self.save_path = save_path
         self.scan_width = scan_width
         self.metacell_method = metacell_method
+        self.cells_per_metacell = cells_per_metacell
         
         self.n_pcs = n_pcs
         self.n_neighbors = n_neighbors
@@ -48,7 +50,8 @@ class TangerinePipeline:
             'scan_width': self.scan_width,
             'metacell_method': self.metacell_method,
             'n_pcs': self.n_pcs,
-            'n_neighbors': self.n_neighbors
+            'n_neighbors': self.n_neighbors,
+            'cells_per_metacell': self.cells_per_metacell
         }
         save_file = os.path.join(self.save_path, 'config.json')
         with open(save_file, 'w') as f:
@@ -79,9 +82,9 @@ class TangerinePipeline:
     def generate_metacells(self):
         """Routes data to the selected Metacell Strategy."""
         if self.metacell_method.lower() == 'kmeans':
-            generator = KMeansMetacellGenerator(self.adata, self.time_var, self.timepoints)
+            generator = KMeansMetacellGenerator(self.adata, self.time_var, self.timepoints, cells_per_metacell=self.cells_per_metacell)
         elif self.metacell_method.lower() == 'seacells':
-            generator = SEACellsMetacellGenerator(self.adata, self.time_var, self.timepoints)
+            generator = SEACellsMetacellGenerator(self.adata, self.time_var, self.timepoints, cells_per_metacell=self.cells_per_metacell)
         else:
             raise ValueError(f"Unknown metacell method: {self.metacell_method}")
             

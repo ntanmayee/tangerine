@@ -5,6 +5,8 @@ from tangerine.preprocess.pipeline import TangerinePipeline
 from tangerine.visualise.app import run_app
 from tangerine.preprocess.logger import logger
 
+import resource
+
 def _tangerine_pipeline(
         pipeline_step=None, 
         # preprocess arguments
@@ -16,7 +18,8 @@ def _tangerine_pipeline(
         save_name=None,
         bed_file_path=None,
         metacell_method='kmeans',
-        dropout_threshold=50
+        dropout_threshold=50,
+        cells_per_metacell=20
         ):
     
     assert timepoints is not None, 'Timepoints must be specified'
@@ -43,13 +46,17 @@ def _tangerine_pipeline(
             time_var=time_var,
             save_path=save_name,
             scan_width=scan_width,
-            metacell_method=metacell_method
+            metacell_method=metacell_method,
+            cells_per_metacell=cells_per_metacell
         )
         
         # Run the unified execution loop
         pipeline.run(bed_file_path=bed_file_path, dropout_threshold=dropout_threshold)
         
         logger.info('Preprocessing completed successfully.')
+        
+        mem_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        print(f"Peak Memory usage: {mem_kb / 1024 / 1024:.2f} GB")
 
     elif "visualise" == pipeline_step:
         save_name = str(save_name)
