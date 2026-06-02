@@ -21,7 +21,7 @@ class TangerinePipeline:
     """
     def __init__(self, adata_path, timepoints, genome, time_var, save_path,
                  metacell_method='kmeans', n_pcs=35, n_neighbors=100, scan_width=10000,
-                 cells_per_metacell=20):
+                 cells_per_metacell=20, model_type='ridge'):
         
         self.adata_path = adata_path
         self.timepoints = timepoints
@@ -30,7 +30,8 @@ class TangerinePipeline:
         self.save_path = save_path
         self.scan_width = scan_width
         self.metacell_method = metacell_method
-        self.cells_per_metacell = cells_per_metacell
+        self.cells_per_metacell = cells_per_metacell,
+        self.model_type = model_type
         
         self.n_pcs = n_pcs
         self.n_neighbors = n_neighbors
@@ -51,7 +52,8 @@ class TangerinePipeline:
             'metacell_method': self.metacell_method,
             'n_pcs': self.n_pcs,
             'n_neighbors': self.n_neighbors,
-            'cells_per_metacell': self.cells_per_metacell
+            'cells_per_metacell': self.cells_per_metacell,
+            'self.model_type': self.model_type
         }
         save_file = os.path.join(self.save_path, 'config.json')
         with open(save_file, 'w') as f:
@@ -192,7 +194,7 @@ class TangerinePipeline:
         # 2. Initialize Prior Scanner & Statistical Inferencer
         scanner = ScannerMotifs(self.genome, scan_width=self.scan_width)
 
-        inferencer = DynamicNetworkInference(self.metacell_dict, self.timepoints, self.time_var)
+        inferencer = DynamicNetworkInference(self.metacell_dict, self.timepoints, self.time_var, self.model_type)
         
         # 3. Load Coordinates locally
         gene_coords_df = self._load_local_gene_annotations(bed_file_path, dropout_threshold)

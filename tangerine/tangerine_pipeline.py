@@ -19,7 +19,8 @@ def _tangerine_pipeline(
         bed_file_path=None,
         metacell_method='kmeans',
         dropout_threshold=50,
-        cells_per_metacell=20
+        cells_per_metacell=20,
+        model_type='ridge'
         ):
     
     assert timepoints is not None, 'Timepoints must be specified'
@@ -47,7 +48,8 @@ def _tangerine_pipeline(
             save_path=save_name,
             scan_width=scan_width,
             metacell_method=metacell_method,
-            cells_per_metacell=cells_per_metacell
+            cells_per_metacell=cells_per_metacell,
+            model_type=model_type
         )
         
         # Run the unified execution loop

@@ -3,7 +3,7 @@ import numpy as np
 import scanpy as sc
 import networkx as nx
 from os.path import join
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, Lasso, ElasticNet
 from sklearn.model_selection import train_test_split
 from scipy.cluster.hierarchy import linkage, leaves_list, fcluster
 from tangerine.preprocess.logger import logger
@@ -14,7 +14,7 @@ class DynamicNetworkInference:
     Handles the statistical inference of the time-varying Gene Regulatory Network.
     Calculates TF-Gene (Ridge Regression) and TF-TF (Spearman) dynamics.
     """
-    def __init__(self, metacell_dict, timepoints, time_var):
+    def __init__(self, metacell_dict, timepoints, time_var, model_type='ridge'):
         """
         Args:
             metacell_dict (dict): Dictionary mapping timepoints to AnnData objects.
@@ -24,6 +24,7 @@ class DynamicNetworkInference:
         self.metacell_dict = metacell_dict
         self.timepoints = timepoints
         self.time_var = time_var
+        self.model_type = model_type.lower()
         
         # Initialize an empty directed graph for each timepoint
         self.networks = {t: nx.DiGraph() for t in self.timepoints}
@@ -107,7 +108,14 @@ class DynamicNetworkInference:
                     try:
                         X_train, X_test, y_train, y_test = train_test_split(X_subset, y, test_size=0.1, random_state=29)
 
-                        model = Ridge()
+                        # select the model based on user input
+                        if self.model_type == 'lasso':
+                            model = Lasso()
+                        elif self.model_type == 'elasticnet':
+                            model = ElasticNet()
+                        else:
+                            model = Ridge() 
+                        
                         model.fit(X_train, y_train)
                         
                         # Store coefficients
