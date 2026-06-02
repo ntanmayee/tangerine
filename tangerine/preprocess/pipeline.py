@@ -30,7 +30,7 @@ class TangerinePipeline:
         self.save_path = save_path
         self.scan_width = scan_width
         self.metacell_method = metacell_method
-        self.cells_per_metacell = cells_per_metacell,
+        self.cells_per_metacell = cells_per_metacell
         self.model_type = model_type
         
         self.n_pcs = n_pcs
