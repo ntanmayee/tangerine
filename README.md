@@ -10,7 +10,7 @@
 ## Install
 Clone the repository 
 ```bash
-git clone git@github.com:ntanmayee/tangerine.git
+git clone https://github.com/ntanmayee/tangerine.git
 cd tangerine
 ```
 
@@ -20,6 +20,8 @@ Install `tangerine` with poetry by running these commands
 conda config --add channels bioconda
 conda config --add channels conda-forge
 conda create -n tang python=3.10 scanpy python-igraph leidenalg typer poetry pysam=0.22 bioconda::htseq conda-forge::pyarrow
+
+conda activate tang
 
 pip install dash gimmemotifs --no-cache-dir
 conda install dash-bootstrap-components
