@@ -2,7 +2,7 @@
 """
 
 from tangerine.preprocess.pipeline import TangerinePipeline 
-from tangerine.visualise.app import run_app
+from tangerine.visualise.app import get_app
 from tangerine.preprocess.logger import logger
 
 import resource
@@ -63,7 +63,8 @@ def _tangerine_pipeline(
     elif "visualise" == pipeline_step:
         save_name = str(save_name)
         logger.info(f'Launching interactive dashboard from {save_name}...')
-        run_app(timepoints, save_name)
+        app = get_app(timepoints, save_name)
+        app.run(debug=True, port=8052)
         
     else:
         logger.error(f"Unknown pipeline step: {pipeline_step}. Use 'process' or 'visualise'.")

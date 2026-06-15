@@ -40,8 +40,8 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
             "format": "png",
             "scale": 4,
             "filename": "tangerine_export",
-            "width": 500,  
-            "height": 250,
+            "width": 375,  
+            "height": 200,
         }
     }
 
@@ -707,7 +707,7 @@ def make_app_layout(app, tf_list, gene_list, timepoints, global_max_coef):
     )
 
 
-def run_app(timepoints, base_path):
+def get_app(timepoints, base_path):
     data_loader = DataLoader(timepoints, base_path)
 
     # Calculate global max coefficient for consistent dot plot colors
@@ -1494,4 +1494,4 @@ def run_app(timepoints, base_path):
 
         return fig
 
-    app.run(debug=True)
+    return app
