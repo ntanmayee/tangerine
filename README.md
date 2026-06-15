@@ -33,6 +33,9 @@ Install the genome of your choice. For example, let's install the `mm10` genome.
 ```bash
 genomepy install mm10 --provider UCSC --annotation
 ```
+You will also need a BED file with the list of genes and their sequence information. It should have `chr`, `start`, `end` and `gene_name` columns.
+
+**Check out the Jupyter Notebook [tutorial](https://github.com/ntanmayee/tangerine/blob/main/tutorial/quick_start_tutorial.ipynb)!**
 
 ## Quick start
 Tangerine assumes that your single cell longitudinal data is already available as an 
@@ -51,7 +54,10 @@ tangerine process \
     -t "name of time column in adata.obs" \
     -tp "list of time points" \
     -sw "length of scan window in bp" \
-    -sp path/to/save/results
+    -sp path/to/save/results \
+    -b mm10_genes.bed \
+    -m kmeans \
+    -dt 50
 ```
 
 ### Visualise
